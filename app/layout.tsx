@@ -2,13 +2,14 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider" // Assuming you have a theme provider
+import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "sonner"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Enhanced Super Agent Workbench",
-  description: "Advanced AI agent management and interaction platform.",
+  title: "CurveAi Agent Workbench",
+  description: "Advanced AI agent collaboration platform",
     generator: 'v0.dev'
 }
 
@@ -20,8 +21,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-          <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-900">{children}</div>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          {children}
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>
