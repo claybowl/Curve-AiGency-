@@ -751,7 +751,7 @@ export default function AgentConsole({
 
   return (
     <>
-      <section className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-850 p-4 md:p-6 overflow-hidden">
+      <section className="flex-1 flex flex-col bg-background p-4 md:p-6 overflow-hidden">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Agent Console</h2>
           {currentAgent && (
@@ -814,17 +814,17 @@ export default function AgentConsole({
                     )}
                     <div
                       className={`p-3 rounded-xl max-w-[80%] text-sm relative group
-                      ${
-                        msg.type === "user"
-                          ? "bg-indigo-500 text-white rounded-br-none"
-                          : msg.type === "typing"
-                            ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
-                            : msg.type === "handoff"
-                              ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
-                              : msg.type === "collaboration" || msg.type === "collaboration-update"
-                                ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
-                                : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none"
-                      }`}
+                    ${
+                      msg.type === "user"
+                        ? "bg-indigo-500 text-white rounded-br-none"
+                        : msg.type === "typing"
+                          ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
+                          : msg.type === "handoff"
+                            ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
+                            : msg.type === "collaboration" || msg.type === "collaboration-update"
+                              ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none"
+                    }`}
                     >
                       {msg.type === "handoff" && msg.handoffData && (
                         <div className="flex items-center gap-2 mb-2 text-blue-700 dark:text-blue-400">
