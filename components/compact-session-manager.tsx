@@ -1,5 +1,7 @@
 "use client"
 
+import { DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,7 +10,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -21,7 +22,18 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Plus, MessageSquare, MoreHorizontal, Edit2, Copy, Trash2, Download, ChevronDown } from "lucide-react"
+import {
+  Plus,
+  MessageSquare,
+  MoreHorizontal,
+  Edit2,
+  Copy,
+  Trash2,
+  Download,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react"
 
 interface ChatSession {
   id: string
@@ -60,6 +72,7 @@ export default function CompactSessionManager({
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newSessionName, setNewSessionName] = useState("")
   const [isExpanded, setIsExpanded] = useState(false)
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false)
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
 
@@ -103,85 +116,110 @@ export default function CompactSessionManager({
   )
 
   return (
-    <div className="w-64 border-r bg-white dark:bg-slate-800 dark:border-slate-700 flex flex-col">
+    <div
+      className={`flex flex-col border-r bg-white dark:bg-slate-800 dark:border-slate-700 transition-all duration-300 ease-in-out ${isPanelCollapsed ? "w-12" : "w-64"}`}
+    >
       {/* Compact Header */}
       <div className="p-3 border-b dark:border-slate-700">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide">Sessions</h2>
-          <div className="flex items-center gap-1">
-            <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm" className="h-6 w-6 p-0">
-                  <Plus className="h-3 w-3" />
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Create New Session</DialogTitle>
-                  <DialogDescription>
-                    Give your new chat session a name, or leave blank for an auto-generated name.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="py-4">
-                  <Input
-                    placeholder="Session name (optional)"
-                    value={newSessionName}
-                    onChange={(e) => setNewSessionName(e.target.value)}
-                    onKeyPress={(e) => e.key === "Enter" && handleCreateSession()}
-                  />
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleCreateSession}>Create Session</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+          {!isPanelCollapsed && (
+            <h2 className="text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide">
+              Sessions
+            </h2>
+          )}
+          <div className={`flex items-center gap-1 ${isPanelCollapsed ? "w-full justify-center" : ""}`}>
+            {!isPanelCollapsed && (
+              <>
+                {/* Existing Dialog component for Create New Session */}
+                <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-6 w-6 p-0">
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Create New Session</DialogTitle>
+                      <DialogDescription>
+                        Give your new chat session a name, or leave blank for an auto-generated name.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4">
+                      <Input
+                        placeholder="Session name (optional)"
+                        value={newSessionName}
+                        onChange={(e) => setNewSessionName(e.target.value)}
+                        onKeyPress={(e) => e.key === "Enter" && handleCreateSession()}
+                      />
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={handleCreateSession}>Create Session</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-6 w-6 p-0">
-                  <MoreHorizontal className="h-3 w-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={onExportAllSessions} className="gap-2">
-                  <Download className="h-4 w-4" />
-                  Export All Sessions
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={handleClearAll} className="gap-2 text-red-600 dark:text-red-400">
-                  <Trash2 className="h-4 w-4" />
-                  Clear All Sessions
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                {/* Existing DropdownMenu component for More Options */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-6 w-6 p-0">
+                      <MoreHorizontal className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={onExportAllSessions} className="gap-2">
+                      <Download className="h-4 w-4" />
+                      Export All Sessions
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleClearAll} className="gap-2 text-red-600 dark:text-red-400">
+                      <Trash2 className="h-4 w-4" />
+                      Clear All Sessions
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsPanelCollapsed(!isPanelCollapsed)}
+              className="h-6 w-6 p-0"
+              aria-label={isPanelCollapsed ? "Expand sessions panel" : "Collapse sessions panel"}
+            >
+              {isPanelCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </Button>
           </div>
         </div>
 
         {/* Active Session Display */}
-        <div
-          className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-700/50 rounded-md cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
-          onClick={() => setIsExpanded(!isExpanded)}
-        >
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <MessageSquare className="h-3 w-3 text-indigo-500 flex-shrink-0" />
-            <span className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
-              {activeSession?.name || "No Session"}
-            </span>
+        {!isPanelCollapsed && (
+          <div
+            className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-700/50 rounded-md cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
+            onClick={() => setIsExpanded(!isExpanded)}
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <MessageSquare className="h-3 w-3 text-indigo-500 flex-shrink-0" />
+              <span className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
+                {activeSession?.name || "No Session"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Badge variant="secondary" className="text-xs px-1.5 py-0 h-4">
+                {sessions.length}
+              </Badge>
+              <ChevronDown
+                className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <Badge variant="secondary" className="text-xs px-1.5 py-0 h-4">
-              {sessions.length}
-            </Badge>
-            <ChevronDown className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Expandable Sessions List */}
-      {isExpanded && (
+      {!isPanelCollapsed && isExpanded && (
         <ScrollArea className="flex-1 max-h-48">
           <div className="p-2 space-y-1">
             {sortedSessions.map((session) => (
@@ -263,6 +301,20 @@ export default function CompactSessionManager({
             ))}
           </div>
         </ScrollArea>
+      )}
+      {isPanelCollapsed && (
+        <div
+          className="flex-1 flex flex-col items-center justify-center py-4 cursor-pointer"
+          onClick={() => setIsPanelCollapsed(false)}
+          role="button"
+          aria-label="Expand sessions panel"
+          tabIndex={0}
+          onKeyPress={(e) => {
+            if (e.key === "Enter" || e.key === " ") setIsPanelCollapsed(false)
+          }}
+        >
+          <MessageSquare className="h-5 w-5 text-slate-500 dark:text-slate-400" />
+        </div>
       )}
     </div>
   )

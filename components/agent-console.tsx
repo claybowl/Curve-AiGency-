@@ -1,14 +1,13 @@
 "use client"
 
 import type React from "react"
-
-import { useState, useRef, useEffect, useCallback } from "react"
-import { Button } from "@/components/ui/button"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { useToast } from "@/components/ui/use-toast"
+import { useSettings } from "@/hooks/use-settings"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import AgentHandoffDialog from "@/components/agent-handoff-dialog"
-import AgentCollaborationDialog from "@/components/agent-collaboration-dialog"
 import {
   Paperclip,
   Mic,
@@ -22,20 +21,33 @@ import {
   Trash2,
   Users,
   ArrowRight,
+  Sparkles,
+  ChevronDown,
+  ChevronRight,
+  Info,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import CollaborationWorkspace from "@/components/collaboration-workspace"
 import { generateInterAgentConversation } from "@/utils/inter-agent-conversations"
+import { cn } from "@/lib/utils"
+import { FixedSizeList as List } from "react-window"
 
 interface Message {
   id: string
-  type: "user" | "bot" | "bot-complex" | "typing" | "handoff" | "collaboration" | "collaboration-update"
+  type: "user" | "bot" | "bot-complex" | "typing" | "handoff" | "collaboration" | "collaboration-update" | "crew_update"
   text: string
   subText?: string
   isSuccess?: boolean
   details?: string[]
   timestamp: Date
   agentName?: string
+  crewUpdateData?: {
+    agentRole?: string
+    taskDescription?: string
+    outputSummary?: string
+    fullOutput?: string
+    isCollapsed?: boolean
+  }
   handoffData?: {
     fromAgent: string
     toAgent: string
@@ -88,6 +100,7 @@ interface CollaborationTask {
   complexity: "low" | "medium" | "high"
 }
 
+// ... (other interfaces remain the same) ...
 interface HandoffReason {
   reason: string
   description: string
@@ -121,230 +134,11 @@ const initialMessages: Message[] = [
   },
 ]
 
-// Collaboration detection patterns
-const collaborationPatterns = [
-  {
-    keywords: ["comprehensive", "full", "complete", "end-to-end", "detailed", "thorough"],
-    task: {
-      id: "comprehensive-analysis",
-      description: "Comprehensive analysis and planning with multiple specialized perspectives",
-      requiredAgents: ["Research Agent", "Data Analysis"],
-      estimatedTime: "15-20 min",
-      complexity: "high" as const,
-    },
-  },
-  {
-    keywords: ["marketing", "campaign", "promotion", "launch", "brand"],
-    task: {
-      id: "marketing-campaign",
-      description: "Complete marketing campaign development from research to content creation",
-      requiredAgents: ["Research Agent", "Web Agent"],
-      estimatedTime: "12-15 min",
-      complexity: "medium" as const,
-    },
-  },
-  {
-    keywords: ["event", "conference", "meeting", "workshop", "seminar"],
-    task: {
-      id: "event-planning",
-      description: "Full event planning with logistics, content, and promotional materials",
-      requiredAgents: ["Planner Agent", "Web Agent"],
-      estimatedTime: "10-12 min",
-      complexity: "medium" as const,
-    },
-  },
-  {
-    keywords: ["business", "strategy", "plan", "proposal", "presentation"],
-    task: {
-      id: "business-strategy",
-      description: "Business strategy development with research, analysis, and presentation",
-      requiredAgents: ["Research Agent", "Data Analysis", "Content Synthesis"],
-      estimatedTime: "18-25 min",
-      complexity: "high" as const,
-    },
-  },
-  {
-    keywords: ["product", "development", "design", "prototype", "innovation"],
-    task: {
-      id: "product-development",
-      description: "Product development process from research to marketing materials",
-      requiredAgents: ["Research Agent", "Data Analysis", "Web Agent"],
-      estimatedTime: "20-25 min",
-      complexity: "high" as const,
-    },
-  },
-]
-
-// Detect if collaboration is needed
-const detectCollaborationNeed = (message: string): CollaborationTask | null => {
-  const lowerMessage = message.toLowerCase()
-
-  for (const pattern of collaborationPatterns) {
-    if (pattern.keywords.some((keyword) => lowerMessage.includes(keyword))) {
-      return pattern.task
-    }
-  }
-
-  return null
-}
-
-// Handoff detection patterns (existing)
-const handoffPatterns = [
-  {
-    keywords: ["video", "animation", "movie", "film", "visual", "graphics"],
-    reason: "Video Content Creation",
-    description:
-      "This request involves video or visual content creation which requires specialized video production capabilities.",
-    suggestedAgents: ["Video Agent"],
-  },
-  {
-    keywords: ["data", "analyze", "statistics", "chart", "graph", "metrics", "dashboard"],
-    reason: "Data Analysis Required",
-    description:
-      "This task involves data analysis, statistics, or visualization which requires specialized analytical capabilities.",
-    suggestedAgents: ["Data Analysis"],
-  },
-  {
-    keywords: ["research", "study", "investigate", "find information", "academic", "literature"],
-    reason: "Research Expertise Needed",
-    description: "This request requires deep research capabilities and information gathering expertise.",
-    suggestedAgents: ["Research Agent"],
-  },
-  {
-    keywords: ["call", "phone", "reservation", "book", "appointment", "contact"],
-    reason: "Phone Communication Required",
-    description:
-      "This task involves making phone calls or handling reservations which requires phone communication capabilities.",
-    suggestedAgents: ["Phone Agent"],
-  },
-  {
-    keywords: ["plan", "itinerary", "schedule", "organize", "event", "trip"],
-    reason: "Planning Expertise Required",
-    description:
-      "This request involves detailed planning and organization which requires specialized planning capabilities.",
-    suggestedAgents: ["Planner Agent"],
-  },
-  {
-    keywords: ["website", "blog", "content", "write", "copy", "social media"],
-    reason: "Web Content Creation",
-    description:
-      "This task involves web content creation or writing which requires specialized content creation capabilities.",
-    suggestedAgents: ["Web Agent"],
-  },
-  {
-    keywords: ["summarize", "report", "synthesis", "compile", "document"],
-    reason: "Content Synthesis Required",
-    description:
-      "This request involves summarizing or synthesizing content which requires specialized synthesis capabilities.",
-    suggestedAgents: ["Content Synthesis"],
-  },
-]
-
-// Detect if a handoff is needed based on user message
-const detectHandoffNeed = (message: string, currentAgent?: string): HandoffReason | null => {
-  const lowerMessage = message.toLowerCase()
-
-  for (const pattern of handoffPatterns) {
-    if (pattern.keywords.some((keyword) => lowerMessage.includes(keyword))) {
-      // Don't suggest handoff if already talking to the suggested agent
-      if (currentAgent && pattern.suggestedAgents.includes(currentAgent)) {
-        continue
-      }
-      return pattern
-    }
-  }
-
-  return null
-}
-
-// Simulated agent responses with handoff and collaboration detection
-const getAgentResponse = (
-  userMessage: string,
-  currentAgent?: string,
-): { messages: Message[]; handoffNeeded?: HandoffReason; collaborationNeeded?: CollaborationTask } => {
-  const lowerMessage = userMessage.toLowerCase()
-  const responses: Message[] = []
-
-  // Check if collaboration is needed first (higher priority)
-  const collaborationNeeded = detectCollaborationNeed(userMessage)
-  if (collaborationNeeded) {
-    responses.push({
-      id: Date.now().toString() + "-collaboration-suggestion",
-      type: "bot",
-      text: `This looks like a complex task that would benefit from multiple agents working together. I can coordinate with ${collaborationNeeded.requiredAgents.join(", ")} to provide you with comprehensive results.`,
-      subText: "Click 'Start Collaboration' to begin multi-agent coordination",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-
-    return { messages: responses, collaborationNeeded }
-  }
-
-  // Check if handoff is needed
-  const handoffNeeded = detectHandoffNeed(userMessage, currentAgent)
-  if (handoffNeeded) {
-    responses.push({
-      id: Date.now().toString() + "-handoff-suggestion",
-      type: "bot",
-      text: `I notice this request involves ${handoffNeeded.reason.toLowerCase()}. While I can try to help, I think you'd get better results from our ${handoffNeeded.suggestedAgents[0]}. Would you like me to transfer this conversation?`,
-      subText: "Click 'Transfer Conversation' to connect with a specialized agent",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-
-    return { messages: responses, handoffNeeded }
-  }
-
-  // Regular responses based on keywords
-  if (lowerMessage.includes("trip") || lowerMessage.includes("travel") || lowerMessage.includes("plan")) {
-    responses.push({
-      id: Date.now().toString() + "-planning",
-      type: "bot-complex",
-      text:
-        currentAgent === "Planner Agent"
-          ? "[PlannerAgent] Creating detailed itinerary...\n[ResearchAgent] Finding best attractions and restaurants..."
-          : "I'll help you with basic planning, but for detailed itineraries, our Planner Agent would be more suitable.",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-  } else if (
-    lowerMessage.includes("reservation") ||
-    lowerMessage.includes("book") ||
-    lowerMessage.includes("restaurant")
-  ) {
-    responses.push({
-      id: Date.now().toString() + "-booking",
-      type: "bot-complex",
-      text:
-        currentAgent === "Phone Agent"
-          ? "[PhoneAgent] Calling restaurant for reservation...\n[DataAgent] Checking availability and preferences..."
-          : "I can provide guidance on reservations, but our Phone Agent can actually make the calls for you.",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-  } else if (lowerMessage.includes("research") || lowerMessage.includes("analyze") || lowerMessage.includes("find")) {
-    responses.push({
-      id: Date.now().toString() + "-research",
-      type: "bot",
-      text:
-        currentAgent === "Research Agent"
-          ? "[ResearchAgent] Conducting comprehensive research on your topic. This may take a moment..."
-          : "I can do basic research, but our Research Agent has access to more comprehensive databases and analysis tools.",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-  } else {
-    responses.push({
-      id: Date.now().toString() + "-general",
-      type: "bot",
-      text: "I understand your request. Let me process that for you and provide the best assistance possible.",
-      timestamp: new Date(),
-      agentName: currentAgent,
-    })
-  }
-
-  return { messages: responses }
-}
+const OutputLine = ({ index, style, data }: { index: number; style: React.CSSProperties; data: string[] }) => (
+  <div style={style} className="text-xs whitespace-pre text-slate-700 dark:text-slate-300 px-1">
+    {data[index]}
+  </div>
+)
 
 export default function AgentConsole({
   sessions,
@@ -353,29 +147,20 @@ export default function AgentConsole({
   availableAgents,
 }: AgentConsoleProps) {
   const [inputValue, setInputValue] = useState("")
-  const [isTyping, setIsTyping] = useState(false)
   const [isSending, setIsSending] = useState(false)
-  const [showHandoffDialog, setShowHandoffDialog] = useState(false)
-  const [showCollaborationDialog, setShowCollaborationDialog] = useState(false)
-  const [pendingHandoff, setPendingHandoff] = useState<{
-    reason: HandoffReason
-    context: string
-    currentAgent: Agent
-  } | null>(null)
-  const [pendingCollaboration, setPendingCollaboration] = useState<{
-    task: CollaborationTask
-    context: string
-  } | null>(null)
-  const [activeCollaborations, setActiveCollaborations] = useState<Map<string, any>>(new Map())
-  const [interAgentMessages, setInterAgentMessages] = useState<Map<string, InterAgentMessage[]>>(new Map())
+  const [showCollaborationDialog, setShowCollaborationDialog] = useState(false) // Restored
+  const [activeCollaborations, setActiveCollaborations] = useState<Map<string, any>>(new Map()) // Restored
+  const [interAgentMessages, setInterAgentMessages] = useState<Map<string, InterAgentMessage[]>>(new Map()) // Restored
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { toast } = useToast()
+
+  const { agentSettings, llmProviderSettings, systemSettings, isSettingsLoaded } = useSettings() // Use our settings hook
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
-  const messages = activeSession?.messages || []
+  const currentMessages = activeSession?.messages || [] // Renamed to avoid conflict with hook
   const currentAgent = availableAgents.find((agent) => agent.name === activeSession?.currentAgent)
 
-  // Auto-scroll to bottom when new messages arrive
   const scrollToBottom = useCallback(() => {
     if (scrollAreaRef.current) {
       const scrollElement = scrollAreaRef.current.querySelector("[data-radix-scroll-area-viewport]")
@@ -387,34 +172,51 @@ export default function AgentConsole({
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, scrollToBottom])
+  }, [currentMessages, scrollToBottom])
 
-  // Add message to chat
   const addMessage = useCallback(
     (message: Message) => {
       if (!activeSession) return
-
-      const updatedMessages = [...messages, message]
+      const updatedMessages = [...currentMessages, message]
       onUpdateSessionMessages(activeSessionId, updatedMessages)
     },
-    [activeSession, messages, activeSessionId, onUpdateSessionMessages],
+    [activeSession, currentMessages, activeSessionId, onUpdateSessionMessages],
   )
 
-  // Update messages
-  const updateMessages = useCallback(
-    (newMessages: Message[]) => {
+  const updateMessage = useCallback(
+    (messageId: string, updates: Partial<Message>) => {
       if (!activeSession) return
-      onUpdateSessionMessages(activeSessionId, newMessages)
+      const updatedMessages = currentMessages.map((msg) =>
+        msg.id === messageId ? { ...msg, ...updates, timestamp: new Date() } : msg,
+      )
+      onUpdateSessionMessages(activeSessionId, updatedMessages)
     },
-    [activeSession, activeSessionId, onUpdateSessionMessages],
+    [activeSession, currentMessages, activeSessionId, onUpdateSessionMessages],
+  )
+
+  const toggleCrewUpdateCollapse = useCallback(
+    (messageId: string) => {
+      if (!activeSession) return
+      const updatedMessages = currentMessages.map((msg) => {
+        if (msg.id === messageId && msg.crewUpdateData) {
+          return {
+            ...msg,
+            crewUpdateData: {
+              ...msg.crewUpdateData,
+              isCollapsed: !msg.crewUpdateData.isCollapsed,
+            },
+          }
+        }
+        return msg
+      })
+      onUpdateSessionMessages(activeSessionId, updatedMessages)
+    },
+    [activeSession, currentMessages, activeSessionId, onUpdateSessionMessages],
   )
 
   const simulateInterAgentCommunication = useCallback(
     (collaborationId: string, agents: Agent[], task: CollaborationTask) => {
-      // Generate conversation based on task type
       const conversation = generateInterAgentConversation(task.id, agents, collaborationId)
-
-      // Simulate real-time message delivery
       conversation.forEach((message, index) => {
         setTimeout(() => {
           setInterAgentMessages((prev) => {
@@ -422,20 +224,16 @@ export default function AgentConsole({
             const updated = [...existing, message]
             return new Map(prev.set(collaborationId, updated))
           })
-        }, index * 2000) // 2 second intervals
+        }, index * 2000)
       })
     },
     [],
   )
 
-  // Handle collaboration start
   const handleStartCollaboration = useCallback(
     (selectedAgents: Agent[], task: CollaborationTask, instructions: string) => {
-      if (!activeSession || !pendingCollaboration) return
-
+      if (!activeSession) return
       const collaborationId = `collab-${Date.now()}`
-
-      // Add collaboration start message
       const collaborationMessage: Message = {
         id: Date.now().toString() + "-collaboration",
         type: "collaboration",
@@ -450,10 +248,7 @@ export default function AgentConsole({
           progress: 0,
         },
       }
-
       addMessage(collaborationMessage)
-
-      // Simulate collaboration progress
       const steps = [
         { agent: selectedAgents[0], description: "Initial analysis and planning", duration: 2000 },
         { agent: selectedAgents[1], description: "Detailed research and data gathering", duration: 3000 },
@@ -461,7 +256,6 @@ export default function AgentConsole({
           ? [{ agent: selectedAgents[2], description: "Synthesis and final recommendations", duration: 2500 }]
           : []),
       ]
-
       let currentStep = 0
       const updateProgress = () => {
         if (currentStep < steps.length) {
@@ -480,13 +274,10 @@ export default function AgentConsole({
               progress: ((currentStep + 1) / steps.length) * 100,
             },
           }
-
           addMessage(progressMessage)
           currentStep++
-
           setTimeout(updateProgress, step.duration)
         } else {
-          // Collaboration completed
           const completionMessage: Message = {
             id: Date.now().toString() + "-collaboration-complete",
             type: "collaboration",
@@ -508,181 +299,216 @@ export default function AgentConsole({
               progress: 100,
             },
           }
-
           addMessage(completionMessage)
         }
       }
-
       setTimeout(updateProgress, 1000)
-      setPendingCollaboration(null)
-
-      // Start inter-agent communication simulation
       simulateInterAgentCommunication(collaborationId, selectedAgents, task)
     },
-    [activeSession, pendingCollaboration, addMessage, simulateInterAgentCommunication],
+    [activeSession, addMessage, simulateInterAgentCommunication],
   )
 
-  // Handle handoff confirmation
-  const handleConfirmHandoff = useCallback(
-    (targetAgent: Agent, handoffNote: string) => {
-      if (!activeSession || !pendingHandoff) return
+  const _handleSendMessage = async (crewConfig?: {
+    type: string
+    involved_agents?: string[]
+    task_description?: string
+  }) => {
+    const currentInputText = inputValue.trim() // Renamed to avoid conflict
+    if (currentInputText === "" && !crewConfig) return
+    if (isSending || !activeSession || !isSettingsLoaded) {
+      // Check if settings are loaded
+      if (!isSettingsLoaded) {
+        toast({
+          title: "Settings not loaded",
+          description: "Please wait for settings to load or check configuration.",
+          variant: "destructive",
+        })
+      }
+      return
+    }
 
-      // Add handoff message
-      const handoffMessage: Message = {
-        id: Date.now().toString() + "-handoff",
-        type: "handoff",
-        text: `Conversation transferred to ${targetAgent.name}`,
-        subText: handoffNote || `Specialized in ${targetAgent.specialties[0]}`,
-        timestamp: new Date(),
-        handoffData: {
-          fromAgent: pendingHandoff.currentAgent.name,
-          toAgent: targetAgent.name,
-          reason: pendingHandoff.reason.reason,
-          note: handoffNote,
+    setIsSending(true)
+    const userMessageText = crewConfig?.task_description || currentInputText
+
+    const userMessage: Message = {
+      id: Date.now().toString() + "-user",
+      type: "user",
+      text: userMessageText,
+      timestamp: new Date(),
+    }
+    addMessage(userMessage)
+
+    if (!crewConfig) {
+      setInputValue("")
+    }
+
+    const botMessageId = Date.now().toString() + "-crew"
+    let accumulatedBotText = ""
+
+    const initialBotMessage: Message = {
+      id: botMessageId,
+      type: "crew_update",
+      text: "🚀 AI Crew is initializing...",
+      timestamp: new Date(),
+      agentName: "CrewAI Orchestrator",
+      subText: "Waiting for updates from the crew...",
+      crewUpdateData: { isCollapsed: true },
+    }
+    addMessage(initialBotMessage)
+    scrollToBottom()
+
+    try {
+      const requestBody = {
+        prompt: userMessageText,
+        type: crewConfig?.type || "general_query",
+        involved_agents: crewConfig?.involved_agents,
+        task_description: crewConfig?.task_description || userMessageText,
+        crew_config: {
+          // Send settings to backend
+          agents: agentSettings,
+          providers: llmProviderSettings,
+          system: systemSettings,
         },
       }
 
-      // Add welcome message from new agent
-      const welcomeMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: "bot",
-        text: `Hello! I'm the ${targetAgent.name}. I've been briefed on your request and I'm ready to help with ${pendingHandoff.reason.reason.toLowerCase()}.`,
-        subText: `Specialized in ${targetAgent.specialties[0]}`,
-        timestamp: new Date(),
-        agentName: targetAgent.name,
+      const response = await fetch("/api/crew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok || !response.body) {
+        const errorText = response.ok ? "Response body is null" : await response.text()
+        throw new Error(`Server error: ${response.status} ${errorText}`)
       }
 
-      const updatedMessages = [...messages, handoffMessage, welcomeMessage]
-      onUpdateSessionMessages(activeSessionId, updatedMessages)
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+      let buffer = ""
 
-      setPendingHandoff(null)
-    },
-    [activeSession, pendingHandoff, messages, activeSessionId, onUpdateSessionMessages],
-  )
+      // eslint-disable-next-line no-constant-identifier
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
 
-  // Add typing indicator
-  const addTypingIndicator = useCallback(() => {
-    if (!activeSession) return
+        buffer += value
+        let eolIndex
+        while ((eolIndex = buffer.indexOf("\n\n")) >= 0) {
+          const messageChunk = buffer.substring(0, eolIndex)
+          buffer = buffer.substring(eolIndex + 2)
 
-    const typingMessage: Message = {
-      id: "typing-indicator",
-      type: "typing",
-      text: "Agent is thinking...",
-      timestamp: new Date(),
-    }
-    const updatedMessages = [...messages, typingMessage]
-    updateMessages(updatedMessages)
-    setIsTyping(true)
-  }, [activeSession, messages, updateMessages])
+          if (messageChunk.startsWith("data: ")) {
+            const jsonData = messageChunk.substring("data: ".length)
+            try {
+              const eventData = JSON.parse(jsonData)
+              let newText = accumulatedBotText
+              let newSubText = ""
+              let crewUpdatePayload: Partial<Message["crewUpdateData"]> = { isCollapsed: true }
 
-  // Remove typing indicator
-  const removeTypingIndicator = useCallback(() => {
-    if (!activeSession) return
+              const existingMessage = currentMessages.find((m) => m.id === botMessageId)
+              if (existingMessage?.crewUpdateData?.fullOutput && eventData.type !== "task_update") {
+                crewUpdatePayload.fullOutput = existingMessage.crewUpdateData.fullOutput
+              }
+              if (existingMessage?.crewUpdateData?.isCollapsed !== undefined && eventData.type !== "task_update") {
+                crewUpdatePayload.isCollapsed = existingMessage.crewUpdateData.isCollapsed
+              }
 
-    const filteredMessages = messages.filter((msg) => msg.id !== "typing-indicator")
-    updateMessages(filteredMessages)
-    setIsTyping(false)
-  }, [activeSession, messages, updateMessages])
+              switch (eventData.type) {
+                case "status_update":
+                  newSubText = `Status: ${eventData.data.message}`
+                  newText = `${eventData.data.message}\n${accumulatedBotText || "Processing..."}`
+                  crewUpdatePayload.agentRole = "Crew Orchestrator"
+                  break
+                case "task_update":
+                  const taskUpdate = eventData.data
+                  crewUpdatePayload = {
+                    agentRole: taskUpdate.agent_role,
+                    taskDescription: taskUpdate.task_description,
+                    outputSummary: taskUpdate.output_summary,
+                    fullOutput: taskUpdate.full_output,
+                    isCollapsed: existingMessage?.crewUpdateData?.isCollapsed ?? true,
+                  }
+                  newText += `\n\n**${taskUpdate.agent_role} completed task:**\n*${taskUpdate.task_description.substring(0, 70)}...*\n${taskUpdate.output_summary}`
+                  newSubText = `Task by ${taskUpdate.agent_role} finished.`
+                  break
+                case "final_result":
+                  newText += `\n\n**🏁 Final Result:**\n${eventData.data.result}`
+                  newSubText = `Crew finished: ${eventData.data.crew_details?.agents_used?.join(", ") || "N/A"}.`
+                  crewUpdatePayload.agentRole = "Crew Orchestrator"
+                  crewUpdatePayload.outputSummary = eventData.data.result
+                  break
+                case "error":
+                  newText += `\n\n**⚠️ Error:** ${eventData.data.message}`
+                  newSubText = "An error occurred with the AI Crew."
+                  crewUpdatePayload.agentRole = "Crew Orchestrator"
+                  break
+                case "stream_end":
+                  newSubText = eventData.data.message || "Processing complete."
+                  if (accumulatedBotText === "") newText = "Processing complete."
+                  crewUpdatePayload.agentRole = "Crew Orchestrator"
+                  crewUpdatePayload.outputSummary = eventData.data.result
+                  break
+              }
+              accumulatedBotText = newText
+              updateMessage(botMessageId, {
+                text: accumulatedBotText,
+                subText: newSubText,
+                crewUpdateData: {
+                  ...(currentMessages.find((m) => m.id === botMessageId)?.crewUpdateData || {}),
+                  ...crewUpdatePayload,
+                },
+              })
+              scrollToBottom()
 
-  // Handle sending messages
-  const handleSendMessage = useCallback(async () => {
-    if (inputValue.trim() === "" || isSending || !activeSession) return
-
-    setIsSending(true)
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: "user",
-      text: inputValue.trim(),
-      timestamp: new Date(),
-    }
-
-    // Add user message
-    addMessage(userMessage)
-    const messageText = inputValue.trim()
-    setInputValue("")
-
-    // Show typing indicator after a short delay
-    setTimeout(() => {
-      addTypingIndicator()
-    }, 500)
-
-    // Get agent responses with handoff and collaboration detection
-    const {
-      messages: responses,
-      handoffNeeded,
-      collaborationNeeded,
-    } = getAgentResponse(messageText, activeSession.currentAgent)
-
-    // Add first response after typing delay
-    setTimeout(
-      () => {
-        removeTypingIndicator()
-        if (responses[0]) {
-          addMessage(responses[0])
-
-          // If collaboration is needed, prepare the collaboration dialog
-          if (collaborationNeeded) {
-            setPendingCollaboration({
-              task: collaborationNeeded,
-              context: messageText,
-            })
-            setShowCollaborationDialog(true)
-          }
-          // If handoff is needed, prepare the handoff dialog
-          else if (handoffNeeded && currentAgent) {
-            setPendingHandoff({
-              reason: handoffNeeded,
-              context: messageText,
-              currentAgent: currentAgent,
-            })
-            setShowHandoffDialog(true)
-          }
-        }
-        setIsSending(false)
-
-        // Add success response for complex operations
-        if (responses[0]?.type === "bot-complex" && !handoffNeeded && !collaborationNeeded) {
-          setTimeout(() => {
-            const successMessage: Message = {
-              id: Date.now().toString() + "-success",
-              type: "bot-complex",
-              text: messageText.toLowerCase().includes("trip")
-                ? "Trip planning completed successfully!"
-                : "Task completed successfully!",
-              isSuccess: true,
-              subText: messageText.toLowerCase().includes("trip")
-                ? "Your comprehensive travel plan is ready."
-                : "Your request has been processed.",
-              details: messageText.toLowerCase().includes("trip")
-                ? [
-                    "5-day itinerary with top attractions",
-                    "Restaurant recommendations with dietary preferences",
-                    "Booking confirmations and contact details",
-                  ]
-                : messageText.toLowerCase().includes("reservation")
-                  ? [
-                      "Table for 4 people confirmed",
-                      "Window seating as requested",
-                      "Special dietary requirements noted",
-                    ]
-                  : ["Task completed with all requirements", "Results are ready for review"],
-              timestamp: new Date(),
-              agentName: activeSession.currentAgent,
+              if (eventData.type === "stream_end" || eventData.type === "error") {
+                await reader.cancel()
+                return
+              }
+            } catch (e) {
+              console.error("Error parsing SSE JSON data:", e, "Raw data:", jsonData)
+              updateMessage(botMessageId, {
+                text: accumulatedBotText + `\n[Stream Parse Error]`,
+                subText: "Error processing stream data.",
+              })
             }
-            addMessage(successMessage)
-          }, 2000)
+          }
         }
-      },
-      1500 + Math.random() * 1000,
-    )
+      }
+    } catch (error) {
+      console.error("Streaming Fetch Error:", error)
+      toast({
+        title: "Connection Error",
+        description: error instanceof Error ? error.message : "Unknown connection error.",
+        variant: "destructive",
+      })
+      updateMessage(botMessageId, {
+        text: `Connection Error: ${error instanceof Error ? error.message : "Unknown connection error."}`,
+        subText: "Failed to connect to AI Crew.",
+      })
+    } finally {
+      setIsSending(false)
+      setTimeout(scrollToBottom, 100)
+      setTimeout(() => {
+        inputRef.current?.focus()
+      }, 100)
+    }
+  }
 
-    // Focus back to input
-    setTimeout(() => {
-      inputRef.current?.focus()
-    }, 100)
-  }, [inputValue, isSending, activeSession, addMessage, addTypingIndicator, removeTypingIndicator, currentAgent])
+  const handleSendMessage = useCallback(_handleSendMessage, [
+    inputValue,
+    isSending,
+    activeSession,
+    addMessage,
+    updateMessage,
+    scrollToBottom,
+    currentMessages,
+    isSettingsLoaded, // Added dependencies
+    agentSettings,
+    llmProviderSettings,
+    systemSettings,
+    toast,
+  ])
 
-  // Handle key press
   const handleKeyPress = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -693,31 +519,26 @@ export default function AgentConsole({
     [handleSendMessage],
   )
 
-  // Clear current session
   const clearCurrentSession = useCallback(() => {
     if (!activeSession) return
-
     const confirmClear = window.confirm(
       `Are you sure you want to clear all messages in "${activeSession.name}"? This action cannot be undone.`,
     )
     if (confirmClear) {
-      updateMessages(initialMessages)
+      onUpdateSessionMessages(activeSessionId, initialMessages)
     }
-  }, [activeSession, updateMessages])
+  }, [activeSession, activeSessionId, onUpdateSessionMessages])
 
-  // Export current session
   const exportCurrentSession = useCallback(() => {
     if (!activeSession) return
-
     const exportData = {
       session: {
         ...activeSession,
-        messages: activeSession.messages.filter((m) => m.type !== "typing"),
+        messages: currentMessages.filter((m) => m.type !== "typing"),
       },
       exportedAt: new Date().toISOString(),
       version: "1.0",
     }
-
     const dataStr = JSON.stringify(exportData, null, 2)
     const dataBlob = new Blob([dataStr], { type: "application/json" })
     const url = URL.createObjectURL(dataBlob)
@@ -728,16 +549,15 @@ export default function AgentConsole({
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-  }, [activeSession])
+  }, [activeSession, currentMessages])
 
-  // Format timestamp
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }
 
   if (!activeSession) {
     return (
-      <section className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-850 p-4 md:p-6 overflow-hidden">
+      <section className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-850 p-4 md:p-6 overflow-hidden min-w-[600px]">
         <div className="flex-1 bg-white dark:bg-slate-900 rounded-lg shadow-sm flex items-center justify-center border dark:border-slate-700">
           <div className="text-center">
             <Bot className="h-12 w-12 text-slate-400 mx-auto mb-4" />
@@ -749,9 +569,11 @@ export default function AgentConsole({
     )
   }
 
+  const outputLinesCache = new Map<string, string[]>()
+
   return (
     <>
-      <section className="flex-1 flex flex-col bg-background p-4 md:p-6 overflow-hidden">
+      <section className="flex-1 flex flex-col bg-background p-4 md:p-6 overflow-hidden min-w-[600px]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Agent Console</h2>
           {currentAgent && (
@@ -759,18 +581,17 @@ export default function AgentConsole({
               <div className={`p-1.5 rounded ${currentAgent.bgColor}`}>
                 <currentAgent.icon className={`h-3 w-3 ${currentAgent.color}`} />
               </div>
-              <span>Current: {currentAgent.name}</span>
+              <span>Active Agent: {currentAgent.name}</span>
             </div>
           )}
         </div>
 
         <div className="flex-1 bg-white dark:bg-slate-900 rounded-lg shadow-sm flex flex-col overflow-hidden border dark:border-slate-700">
-          {/* Chat Header */}
           <div className="flex items-center justify-between p-4 border-b dark:border-slate-700">
             <div className="flex items-center gap-4">
               <h3 className="font-medium text-slate-800 dark:text-slate-100">{activeSession.name}</h3>
               <span className="text-sm text-slate-600 dark:text-slate-400">
-                {messages.filter((m) => m.type !== "typing").length} messages
+                {currentMessages.filter((m) => m.type !== "typing").length} messages
               </span>
             </div>
             <DropdownMenu>
@@ -781,28 +602,48 @@ export default function AgentConsole({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={exportCurrentSession} className="gap-2">
-                  <Download className="h-4 w-4" />
-                  Export This Session
+                  <Download className="h-4 w-4" /> Export Session
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={clearCurrentSession} className="gap-2 text-red-600 dark:text-red-400">
-                  <Trash2 className="h-4 w-4" />
-                  Clear This Session
+                  <Trash2 className="h-4 w-4" /> Clear Session
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
 
-          {/* Messages */}
           <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
             <div className="space-y-6">
-              {messages.map((msg) => (
-                <div key={msg.id}>
-                  {/* Regular message display */}
-                  <div className={`flex items-start gap-3 ${msg.type === "user" ? "justify-end" : ""}`}>
+              {currentMessages.map((msg) => {
+                const getOutputLines = (fullOutput: string | undefined): string[] => {
+                  if (!fullOutput) return []
+                  if (outputLinesCache.has(msg.id)) {
+                    return outputLinesCache.get(msg.id)!
+                  }
+                  const lines = fullOutput.split("\n")
+                  outputLinesCache.set(msg.id, lines)
+                  return lines
+                }
+
+                const outputLines = useMemo(
+                  () => getOutputLines(msg.crewUpdateData?.fullOutput),
+                  [msg.crewUpdateData?.fullOutput, msg.id],
+                )
+
+                return (
+                  <div key={msg.id} className={`flex items-start gap-3 ${msg.type === "user" ? "justify-end" : ""}`}>
                     {msg.type !== "user" && (
-                      <div className="flex-shrink-0 h-8 w-8 rounded-full bg-indigo-500 dark:bg-indigo-600 flex items-center justify-center text-white mt-1">
+                      <div
+                        className={cn(
+                          "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white mt-1",
+                          msg.type === "crew_update"
+                            ? "bg-purple-500 dark:bg-purple-600"
+                            : "bg-indigo-500 dark:bg-indigo-600",
+                        )}
+                      >
                         {msg.type === "typing" ? (
                           <Loader2 size={16} className="animate-spin" />
+                        ) : msg.type === "crew_update" ? (
+                          <Sparkles size={18} />
                         ) : msg.type === "handoff" ? (
                           <ArrowRight size={16} />
                         ) : msg.type === "collaboration" || msg.type === "collaboration-update" ? (
@@ -813,53 +654,91 @@ export default function AgentConsole({
                       </div>
                     )}
                     <div
-                      className={`p-3 rounded-xl max-w-[80%] text-sm relative group
-                    ${
-                      msg.type === "user"
-                        ? "bg-indigo-500 text-white rounded-br-none"
-                        : msg.type === "typing"
-                          ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
-                          : msg.type === "handoff"
-                            ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
-                            : msg.type === "collaboration" || msg.type === "collaboration-update"
-                              ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
-                              : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none"
-                    }`}
+                      className={cn(
+                        "p-3 rounded-xl max-w-[80%] text-sm relative group",
+                        msg.type === "user"
+                          ? "bg-indigo-500 text-white rounded-br-none"
+                          : msg.type === "crew_update"
+                            ? "bg-purple-50 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700 rounded-bl-none"
+                            : msg.type === "typing"
+                              ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
+                              : msg.type === "handoff"
+                                ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
+                                : msg.type === "collaboration" || msg.type === "collaboration-update"
+                                  ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
+                                  : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none",
+                      )}
                     >
-                      {msg.type === "handoff" && msg.handoffData && (
-                        <div className="flex items-center gap-2 mb-2 text-blue-700 dark:text-blue-400">
-                          <ArrowRight size={16} />
-                          <span className="font-medium text-xs">
-                            {msg.handoffData.fromAgent} → {msg.handoffData.toAgent}
-                          </span>
+                      {msg.type === "crew_update" && msg.crewUpdateData?.agentRole && (
+                        <div className="mb-1 text-xs font-medium text-purple-700 dark:text-purple-400">
+                          <Info size={12} className="inline mr-1" />
+                          {msg.crewUpdateData.agentRole}
+                          {msg.crewUpdateData.taskDescription && (
+                            <span className="text-slate-500 dark:text-slate-400 font-normal">
+                              {" "}
+                              (Task: {msg.crewUpdateData.taskDescription.substring(0, 40)}...)
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <p className="whitespace-pre-wrap">{msg.text}</p>
+
+                      {msg.type === "crew_update" && msg.crewUpdateData?.fullOutput && (
+                        <div className="mt-2 border-t border-purple-200 dark:border-purple-700 pt-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleCrewUpdateCollapse(msg.id)}
+                            className="text-xs text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-800/50 w-full justify-start px-2 py-1"
+                            aria-expanded={!msg.crewUpdateData.isCollapsed}
+                            aria-controls={`full-output-${msg.id}`}
+                          >
+                            {msg.crewUpdateData.isCollapsed ? (
+                              <ChevronRight size={14} className="mr-1" />
+                            ) : (
+                              <ChevronDown size={14} className="mr-1" />
+                            )}
+                            {msg.crewUpdateData.isCollapsed ? "Show Full Output" : "Hide Full Output"}
+                          </Button>
+                          {!msg.crewUpdateData.isCollapsed && (
+                            <div
+                              id={`full-output-${msg.id}`}
+                              className="mt-1 w-full rounded-md border bg-purple-25 dark:bg-purple-900/20 p-0.5 overflow-hidden"
+                              style={{ height: "192px" }}
+                            >
+                              {outputLines.length > 0 ? (
+                                <List
+                                  height={192}
+                                  itemCount={outputLines.length}
+                                  itemSize={18}
+                                  width="100%"
+                                  itemData={outputLines}
+                                  className="custom-scrollbar"
+                                >
+                                  {OutputLine}
+                                </List>
+                              ) : (
+                                <p className="p-2 text-xs text-slate-500 dark:text-slate-400">
+                                  No detailed output available.
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {(msg.type === "collaboration" || msg.type === "collaboration-update") &&
-                        msg.collaborationData && (
-                          <div className="flex items-center gap-2 mb-2 text-indigo-700 dark:text-indigo-400">
-                            <Users size={16} />
-                            <span className="font-medium text-xs">{msg.collaborationData.agents.join(" + ")}</span>
-                            {msg.collaborationData.progress !== undefined && (
-                              <span className="text-xs">({Math.round(msg.collaborationData.progress)}%)</span>
-                            )}
-                          </div>
-                        )}
-
-                      <p className="whitespace-pre-wrap">{msg.text}</p>
                       {msg.subText && !msg.isSuccess && (
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{msg.subText}</p>
                       )}
                       {msg.isSuccess && (
                         <div className="mt-2 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-md">
                           <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
-                            <CheckCircle2 size={16} />
-                            <p className="font-medium text-xs">{msg.subText}</p>
+                            <CheckCircle2 size={16} /> <p className="font-medium text-xs">{msg.subText}</p>
                           </div>
                           {msg.details && (
                             <ul className="list-disc list-inside text-xs text-green-600 dark:text-green-300 mt-1 space-y-0.5 pl-1">
-                              {msg.details.map((detail, i) => (
-                                <li key={i}>{detail}</li>
+                              {msg.details.map((d, i) => (
+                                <li key={i}>{d}</li>
                               ))}
                             </ul>
                           )}
@@ -878,39 +757,23 @@ export default function AgentConsole({
                       </div>
                     )}
                   </div>
-                </div>
-              ))}
-              {/* Render collaboration workspaces for active collaborations */}
-              {Array.from(interAgentMessages.entries()).map(([collabId, messages]) => {
-                const collaborationMessage = activeSession.messages.find(
-                  (msg) => msg.collaborationData?.id === collabId && msg.type === "collaboration",
                 )
-
-                if (!collaborationMessage?.collaborationData) return null
-
-                const collabAgents = availableAgents.filter((agent) =>
-                  collaborationMessage.collaborationData!.agents.includes(agent.name),
+              })}
+              {Array.from(interAgentMessages.entries()).map(([collabId, collabMsgs]) => {
+                const collabMsg = currentMessages.find(
+                  (m) => m.collaborationData?.id === collabId && m.type === "collaboration",
                 )
-
-                // Calculate dynamic progress based on messages
-                const totalExpectedMessages = 8 // Average conversation length
-                const currentProgress = Math.min((messages.length / totalExpectedMessages) * 100, 100)
-
-                const mockSteps = collabAgents.map((agent, index) => {
-                  const agentMessages = messages.filter((msg) => msg.fromAgent === agent.name)
-                  const hasCompleted = agentMessages.some((msg) => msg.type === "completion")
-                  const isActive = agentMessages.length > 0 && !hasCompleted
-
-                  return {
-                    id: `step-${collabId}-${index}`,
-                    agentName: agent.name,
-                    description: `${agent.name} ${agent.specialties[0].toLowerCase()}`,
-                    status: hasCompleted ? "completed" : isActive ? "in-progress" : ("pending" as const),
-                    progress: hasCompleted ? 100 : isActive ? Math.min(agentMessages.length * 25, 90) : 0,
-                    estimatedTime: "2-3 min",
-                  }
-                })
-
+                if (!collabMsg?.collaborationData) return null
+                const collabAgents = availableAgents.filter((a) => collabMsg.collaborationData!.agents.includes(a.name))
+                const currentProgress = Math.min((collabMsgs.length / 8) * 100, 100)
+                const mockSteps = collabAgents.map((agent, index) => ({
+                  id: `step-${collabId}-${index}`,
+                  agentName: agent.name,
+                  description: `${agent.name} ${agent.specialties[0].toLowerCase()}`,
+                  status: "pending" as const,
+                  progress: 0,
+                  estimatedTime: "2-3 min",
+                }))
                 return (
                   <div key={collabId} className="my-6">
                     <CollaborationWorkspace
@@ -919,7 +782,7 @@ export default function AgentConsole({
                       steps={mockSteps}
                       overallProgress={currentProgress}
                       estimatedCompletion="8-12 min"
-                      interAgentMessages={messages}
+                      interAgentMessages={collabMsgs}
                     />
                   </div>
                 )
@@ -927,17 +790,16 @@ export default function AgentConsole({
             </div>
           </ScrollArea>
 
-          {/* Input Area */}
           <div className="p-4 border-t bg-white dark:bg-slate-900 dark:border-slate-700">
             <div className="relative">
               <Input
                 ref={inputRef}
                 type="text"
-                placeholder="Try: Create a comprehensive marketing strategy, or Plan a complete business proposal..."
+                placeholder="Ask the AI Crew... (e.g., Draft a marketing plan for a new SaaS product)"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
-                disabled={isSending}
+                disabled={isSending || !isSettingsLoaded} // Disable if settings not loaded
                 className="pr-28 pl-4 py-3 h-12 text-sm dark:bg-slate-800 dark:border-slate-700 disabled:opacity-50"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -960,53 +822,28 @@ export default function AgentConsole({
                 <Button
                   size="icon"
                   className="bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 w-9 h-9 disabled:opacity-50"
-                  onClick={handleSendMessage}
-                  disabled={isSending || inputValue.trim() === ""}
+                  onClick={() => handleSendMessage()}
+                  disabled={isSending || inputValue.trim() === "" || !isSettingsLoaded} // Disable if settings not loaded
                 >
                   {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
                 </Button>
               </div>
             </div>
-            {isTyping && (
+            {isSending && (
               <div className="flex items-center gap-2 mt-2 text-xs text-slate-500 dark:text-slate-400">
                 <Loader2 size={12} className="animate-spin" />
-                <span>Agent is processing your request...</span>
+                <span>AI Crew is processing your request...</span>
+              </div>
+            )}
+            {!isSettingsLoaded && (
+              <div className="flex items-center gap-2 mt-2 text-xs text-amber-600 dark:text-amber-500">
+                <Loader2 size={12} className="animate-spin" />
+                <span>Loading settings... Please wait.</span>
               </div>
             )}
           </div>
         </div>
       </section>
-
-      {/* Handoff Dialog */}
-      {pendingHandoff && (
-        <AgentHandoffDialog
-          isOpen={showHandoffDialog}
-          onClose={() => {
-            setShowHandoffDialog(false)
-            setPendingHandoff(null)
-          }}
-          currentAgent={pendingHandoff.currentAgent}
-          availableAgents={availableAgents}
-          handoffReason={pendingHandoff.reason}
-          conversationContext={pendingHandoff.context}
-          onConfirmHandoff={handleConfirmHandoff}
-        />
-      )}
-
-      {/* Collaboration Dialog */}
-      {pendingCollaboration && (
-        <AgentCollaborationDialog
-          isOpen={showCollaborationDialog}
-          onClose={() => {
-            setShowCollaborationDialog(false)
-            setPendingCollaboration(null)
-          }}
-          availableAgents={availableAgents}
-          suggestedTask={pendingCollaboration.task}
-          conversationContext={pendingCollaboration.context}
-          onStartCollaboration={handleStartCollaboration}
-        />
-      )}
     </>
   )
 }

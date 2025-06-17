@@ -51,6 +51,7 @@
     "react-dom": "^19",
     "react-hook-form": "^7.54.1",
     "react-resizable-panels": "^2.1.7",
+    "react-window": "latest",
     "recharts": "^2.15.0",
     "sonner": "latest",
     "tailwind-merge": "^2.5.5",

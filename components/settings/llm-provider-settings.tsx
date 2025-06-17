@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { AlertCircle, CheckCircle2, Eye, EyeOff, Plus, Trash2, TestTube, Save } from "lucide-react"
+import { AlertCircle, CheckCircle2, Plus, Trash2, TestTube, Save, Shield } from "lucide-react"
 import { useFormValidation } from "@/hooks/use-form-validation"
 import { llmProviderSchema } from "@/lib/validation"
 import { FormError, FormErrorSummary } from "@/components/ui/form-error"
@@ -32,12 +32,11 @@ interface LLMProvider {
   description?: string
 }
 
-const defaultProviders: LLMProvider[] = [
+const defaultProviders: Omit<LLMProvider, "apiKey">[] = [
   {
     id: "openai",
     name: "OpenAI",
     type: "openai",
-    apiKey: "",
     endpoint: "https://api.openai.com/v1",
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
     defaultModel: "gpt-4o",
@@ -52,7 +51,6 @@ const defaultProviders: LLMProvider[] = [
     id: "anthropic",
     name: "Anthropic",
     type: "anthropic",
-    apiKey: "",
     endpoint: "https://api.anthropic.com/v1",
     models: ["claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307"],
     defaultModel: "claude-3-5-sonnet-20241022",
@@ -67,7 +65,6 @@ const defaultProviders: LLMProvider[] = [
     id: "google",
     name: "Google AI",
     type: "google",
-    apiKey: "",
     endpoint: "https://generativelanguage.googleapis.com/v1",
     models: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"],
     defaultModel: "gemini-1.5-pro",
@@ -81,7 +78,7 @@ const defaultProviders: LLMProvider[] = [
 ]
 
 export default function LLMProviderSettings() {
-  const [providers, setProviders] = useState<LLMProvider[]>(defaultProviders)
+  const [providers, setProviders] = useState<LLMProvider[]>(defaultProviders as any)
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({})
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({})
@@ -220,13 +217,6 @@ export default function LLMProviderSettings() {
     } finally {
       setTestingProvider(null)
     }
-  }
-
-  const toggleApiKeyVisibility = (providerId: string) => {
-    setShowApiKeys({
-      ...showApiKeys,
-      [providerId]: !showApiKeys[providerId],
-    })
   }
 
   const getProviderIcon = (type: string) => {
@@ -388,28 +378,16 @@ export default function LLMProviderSettings() {
               {/* API Configuration */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor={`${provider.id}-api-key`}>API Key *</Label>
-                  <div className="relative">
-                    <Input
-                      id={`${provider.id}-api-key`}
-                      type={showApiKeys[provider.id] ? "text" : "password"}
-                      value={provider.apiKey}
-                      onChange={(e) => handleFieldChange(provider.id, "apiKey", e.target.value)}
-                      placeholder="Enter API key..."
-                      className="pr-10"
-                      onFocus={() => setEditingProvider(provider.id)}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3"
-                      onClick={() => toggleApiKeyVisibility(provider.id)}
-                    >
-                      {showApiKeys[provider.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
+                  <Label>API Key Status</Label>
+                  <div className="flex items-center space-x-2 p-2 bg-slate-100 dark:bg-slate-800 rounded-md h-10">
+                    <Badge variant="secondary">
+                      <Shield className="h-3 w-3 mr-1.5" />
+                      Configured on Server
+                    </Badge>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      API keys are securely managed on the backend.
+                    </p>
                   </div>
-                  <FormError error={getFieldError("apiKey")} />
                 </div>
 
                 <div className="space-y-2">
