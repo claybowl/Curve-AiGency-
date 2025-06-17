@@ -9,8 +9,6 @@ import { useToast } from "@/components/ui/use-toast"
 import { useSettings } from "@/hooks/use-settings"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import {
-  Paperclip,
-  Mic,
   Send,
   Bot,
   UserCircle2,
@@ -38,7 +36,7 @@ interface Message {
   text: string
   subText?: string
   isSuccess?: boolean
-  details?: string[]
+  details?: any // Can be an object or array from n8n
   timestamp: Date
   agentName?: string
   crewUpdateData?: {
@@ -128,8 +126,8 @@ const initialMessages: Message[] = [
   {
     id: "1",
     type: "bot",
-    text: "Hello! I'm your Enhanced Super Agent. How can I assist you today?",
-    subText: "System initialized with safety protocols active",
+    text: "Hello! I'm your Enhanced Super Agent, now connected to n8n. How can I assist you today?",
+    subText: "System initialized and connected to n8n integration point.",
     timestamp: new Date(Date.now() - 300000),
   },
 ]
@@ -155,11 +153,27 @@ export default function AgentConsole({
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
-  const { agentSettings, llmProviderSettings, systemSettings, isSettingsLoaded } = useSettings() // Use our settings hook
+  const { agentSettings, systemSettings, isSettingsLoaded, llmProviderSettings } = useSettings() // Use our settings hook
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const currentMessages = activeSession?.messages || [] // Renamed to avoid conflict with hook
   const currentAgent = availableAgents.find((agent) => agent.name === activeSession?.currentAgent)
+  const currentAgentInfo = availableAgents.find((agent) => agent.name === activeSession?.currentAgent)
+
+  const outputLinesCache = useRef(new Map<string, string[]>())
+  const outputLines = useMemo(() => {
+    const lastMessage = currentMessages[currentMessages.length - 1]
+    if (lastMessage?.type === "crew_update" && lastMessage.crewUpdateData?.fullOutput) {
+      const fullOutput = lastMessage.crewUpdateData.fullOutput
+      if (outputLinesCache.current.has(fullOutput)) {
+        return outputLinesCache.current.get(fullOutput)!
+      }
+      const lines = fullOutput.split("\n")
+      outputLinesCache.current.set(fullOutput, lines)
+      return lines
+    }
+    return []
+  }, [currentMessages])
 
   const scrollToBottom = useCallback(() => {
     if (scrollAreaRef.current) {
@@ -494,30 +508,119 @@ export default function AgentConsole({
     }
   }
 
-  const handleSendMessage = useCallback(_handleSendMessage, [
-    inputValue,
-    isSending,
-    activeSession,
-    addMessage,
-    updateMessage,
-    scrollToBottom,
-    currentMessages,
-    isSettingsLoaded, // Added dependencies
-    agentSettings,
-    llmProviderSettings,
-    systemSettings,
-    toast,
-  ])
+  const handleSendMessage = async () => {
+    const currentInputText = inputValue.trim()
+    if (currentInputText === "" || isSending || !activeSession) return
 
-  const handleKeyPress = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault()
-        handleSendMessage()
+    if (!isSettingsLoaded) {
+      toast({
+        title: "Settings not loaded",
+        description: "Please wait for settings to load before sending a message.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const activeAgentName = activeSession.currentAgent || "Planner Agent"
+    const activeAgentConfig = agentSettings.find((a) => a.name === activeAgentName)
+
+    if (!activeAgentConfig) {
+      toast({
+        title: "Agent Configuration Not Found",
+        description: `Could not find settings for "${activeAgentName}". Please check your agent settings.`,
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSending(true)
+    setInputValue("")
+
+    const userMessage: Message = {
+      id: Date.now().toString() + "-user",
+      type: "user",
+      text: currentInputText,
+      timestamp: new Date(),
+    }
+    addMessage(userMessage)
+
+    const typingMessage: Message = {
+      id: Date.now().toString() + "-typing",
+      type: "typing",
+      text: `${activeAgentName} is thinking...`,
+      timestamp: new Date(),
+      agentName: activeAgentName,
+    }
+    addMessage(typingMessage)
+    scrollToBottom()
+
+    try {
+      const response = await fetch("/api/n8n", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: currentInputText,
+          agentConfig: activeAgentConfig,
+          systemSettings: systemSettings,
+        }),
+      })
+
+      // Remove typing indicator
+      onUpdateSessionMessages(
+        activeSessionId,
+        currentMessages.filter((m) => m.id !== typingMessage.id),
+      )
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "An unknown error occurred with the n8n service.")
       }
-    },
-    [handleSendMessage],
-  )
+
+      const data = await response.json()
+
+      const botMessage: Message = {
+        id: Date.now().toString() + "-bot",
+        type: "bot-complex",
+        text: data.output || "Received a response from the agent.",
+        subText: `Response from ${activeAgentName} via n8n`,
+        details: data,
+        timestamp: new Date(),
+        agentName: activeAgentName,
+      }
+      addMessage(botMessage)
+    } catch (error) {
+      console.error("Error sending message to n8n:", error)
+      const errorMessage = error instanceof Error ? error.message : "Unknown error"
+      toast({
+        title: "Error Connecting to Agent",
+        description: errorMessage,
+        variant: "destructive",
+      })
+      // Remove typing indicator and add error message
+      onUpdateSessionMessages(
+        activeSessionId,
+        currentMessages.filter((m) => m.id !== typingMessage.id),
+      )
+      const errorMessageBot: Message = {
+        id: Date.now().toString() + "-error",
+        type: "bot",
+        text: `Sorry, I encountered an error: ${errorMessage}`,
+        subText: "Please check the connection to the n8n service and try again.",
+        timestamp: new Date(),
+      }
+      addMessage(errorMessageBot)
+    } finally {
+      setIsSending(false)
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      handleSendMessage()
+    }
+  }
 
   const clearCurrentSession = useCallback(() => {
     if (!activeSession) return
@@ -551,9 +654,7 @@ export default function AgentConsole({
     URL.revokeObjectURL(url)
   }, [activeSession, currentMessages])
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  }
+  const formatTime = (date: Date) => date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 
   if (!activeSession) {
     return (
@@ -569,281 +670,236 @@ export default function AgentConsole({
     )
   }
 
-  const outputLinesCache = new Map<string, string[]>()
-
   return (
-    <>
-      <section className="flex-1 flex flex-col bg-background p-4 md:p-6 overflow-hidden min-w-[600px]">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Agent Console</h2>
-          {currentAgent && (
-            <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-              <div className={`p-1.5 rounded ${currentAgent.bgColor}`}>
-                <currentAgent.icon className={`h-3 w-3 ${currentAgent.color}`} />
-              </div>
-              <span>Active Agent: {currentAgent.name}</span>
+    <section className="flex-1 flex flex-col bg-background p-4 md:p-6 overflow-hidden min-w-[600px]">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Agent Console</h2>
+        {currentAgentInfo && (
+          <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <div className={`p-1.5 rounded ${currentAgentInfo.bgColor}`}>
+              <currentAgentInfo.icon className={`h-3 w-3 ${currentAgentInfo.color}`} />
             </div>
-          )}
+            <span>Active Agent: {currentAgentInfo.name}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 bg-white dark:bg-slate-900 rounded-lg shadow-sm flex flex-col overflow-hidden border dark:border-slate-700">
+        <div className="flex items-center justify-between p-4 border-b dark:border-slate-700">
+          <div className="flex items-center gap-4">
+            <h3 className="font-medium text-slate-800 dark:text-slate-100">{activeSession.name}</h3>
+            <span className="text-sm text-slate-600 dark:text-slate-400">
+              {currentMessages.filter((m) => m.type !== "typing").length} messages
+            </span>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={exportCurrentSession} className="gap-2">
+                <Download className="h-4 w-4" /> Export Session
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={clearCurrentSession} className="gap-2 text-red-600 dark:text-red-400">
+                <Trash2 className="h-4 w-4" /> Clear Session
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        <div className="flex-1 bg-white dark:bg-slate-900 rounded-lg shadow-sm flex flex-col overflow-hidden border dark:border-slate-700">
-          <div className="flex items-center justify-between p-4 border-b dark:border-slate-700">
-            <div className="flex items-center gap-4">
-              <h3 className="font-medium text-slate-800 dark:text-slate-100">{activeSession.name}</h3>
-              <span className="text-sm text-slate-600 dark:text-slate-400">
-                {currentMessages.filter((m) => m.type !== "typing").length} messages
-              </span>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={exportCurrentSession} className="gap-2">
-                  <Download className="h-4 w-4" /> Export Session
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={clearCurrentSession} className="gap-2 text-red-600 dark:text-red-400">
-                  <Trash2 className="h-4 w-4" /> Clear Session
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-            <div className="space-y-6">
-              {currentMessages.map((msg) => {
-                const getOutputLines = (fullOutput: string | undefined): string[] => {
-                  if (!fullOutput) return []
-                  if (outputLinesCache.has(msg.id)) {
-                    return outputLinesCache.get(msg.id)!
-                  }
-                  const lines = fullOutput.split("\n")
-                  outputLinesCache.set(msg.id, lines)
-                  return lines
-                }
-
-                const outputLines = useMemo(
-                  () => getOutputLines(msg.crewUpdateData?.fullOutput),
-                  [msg.crewUpdateData?.fullOutput, msg.id],
-                )
-
-                return (
-                  <div key={msg.id} className={`flex items-start gap-3 ${msg.type === "user" ? "justify-end" : ""}`}>
-                    {msg.type !== "user" && (
-                      <div
-                        className={cn(
-                          "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white mt-1",
-                          msg.type === "crew_update"
-                            ? "bg-purple-500 dark:bg-purple-600"
-                            : "bg-indigo-500 dark:bg-indigo-600",
-                        )}
-                      >
-                        {msg.type === "typing" ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : msg.type === "crew_update" ? (
-                          <Sparkles size={18} />
-                        ) : msg.type === "handoff" ? (
-                          <ArrowRight size={16} />
-                        ) : msg.type === "collaboration" || msg.type === "collaboration-update" ? (
-                          <Users size={16} />
-                        ) : (
-                          <Bot size={18} />
-                        )}
-                      </div>
+        <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+          <div className="space-y-6">
+            {currentMessages.map((msg) => (
+              <div key={msg.id} className={`flex items-start gap-3 ${msg.type === "user" ? "justify-end" : ""}`}>
+                {msg.type !== "user" && (
+                  <div
+                    className={cn(
+                      "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white mt-1",
+                      "bg-indigo-500 dark:bg-indigo-600",
                     )}
-                    <div
-                      className={cn(
-                        "p-3 rounded-xl max-w-[80%] text-sm relative group",
-                        msg.type === "user"
-                          ? "bg-indigo-500 text-white rounded-br-none"
-                          : msg.type === "crew_update"
-                            ? "bg-purple-50 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700 rounded-bl-none"
-                            : msg.type === "typing"
-                              ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
-                              : msg.type === "handoff"
-                                ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
-                                : msg.type === "collaboration" || msg.type === "collaboration-update"
-                                  ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
-                                  : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none",
+                  >
+                    {msg.type === "typing" ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : msg.type === "crew_update" ? (
+                      <Sparkles size={18} />
+                    ) : msg.type === "handoff" ? (
+                      <ArrowRight size={16} />
+                    ) : msg.type === "collaboration" || msg.type === "collaboration-update" ? (
+                      <Users size={16} />
+                    ) : (
+                      <Bot size={18} />
+                    )}
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    "p-3 rounded-xl max-w-[80%] text-sm relative group",
+                    msg.type === "user"
+                      ? "bg-indigo-500 text-white rounded-br-none"
+                      : msg.type === "crew_update"
+                        ? "bg-purple-50 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700 rounded-bl-none"
+                        : msg.type === "typing"
+                          ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-bl-none animate-pulse"
+                          : msg.type === "handoff"
+                            ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
+                            : msg.type === "collaboration" || msg.type === "collaboration-update"
+                              ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none",
+                  )}
+                >
+                  {msg.type === "crew_update" && msg.crewUpdateData?.agentRole && (
+                    <div className="mb-1 text-xs font-medium text-purple-700 dark:text-purple-400">
+                      <Info size={12} className="inline mr-1" />
+                      {msg.crewUpdateData.agentRole}
+                      {msg.crewUpdateData.taskDescription && (
+                        <span className="text-slate-500 dark:text-slate-400 font-normal">
+                          {" "}
+                          (Task: {msg.crewUpdateData.taskDescription.substring(0, 40)}...)
+                        </span>
                       )}
-                    >
-                      {msg.type === "crew_update" && msg.crewUpdateData?.agentRole && (
-                        <div className="mb-1 text-xs font-medium text-purple-700 dark:text-purple-400">
-                          <Info size={12} className="inline mr-1" />
-                          {msg.crewUpdateData.agentRole}
-                          {msg.crewUpdateData.taskDescription && (
-                            <span className="text-slate-500 dark:text-slate-400 font-normal">
-                              {" "}
-                              (Task: {msg.crewUpdateData.taskDescription.substring(0, 40)}...)
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <p className="whitespace-pre-wrap">{msg.text}</p>
+                    </div>
+                  )}
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
 
-                      {msg.type === "crew_update" && msg.crewUpdateData?.fullOutput && (
-                        <div className="mt-2 border-t border-purple-200 dark:border-purple-700 pt-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toggleCrewUpdateCollapse(msg.id)}
-                            className="text-xs text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-800/50 w-full justify-start px-2 py-1"
-                            aria-expanded={!msg.crewUpdateData.isCollapsed}
-                            aria-controls={`full-output-${msg.id}`}
-                          >
-                            {msg.crewUpdateData.isCollapsed ? (
-                              <ChevronRight size={14} className="mr-1" />
-                            ) : (
-                              <ChevronDown size={14} className="mr-1" />
-                            )}
-                            {msg.crewUpdateData.isCollapsed ? "Show Full Output" : "Hide Full Output"}
-                          </Button>
-                          {!msg.crewUpdateData.isCollapsed && (
-                            <div
-                              id={`full-output-${msg.id}`}
-                              className="mt-1 w-full rounded-md border bg-purple-25 dark:bg-purple-900/20 p-0.5 overflow-hidden"
-                              style={{ height: "192px" }}
+                  {msg.type === "crew_update" && msg.crewUpdateData?.fullOutput && (
+                    <div className="mt-2 border-t border-purple-200 dark:border-purple-700 pt-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => toggleCrewUpdateCollapse(msg.id)}
+                        className="text-xs text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-800/50 w-full justify-start px-2 py-1"
+                        aria-expanded={!msg.crewUpdateData.isCollapsed}
+                        aria-controls={`full-output-${msg.id}`}
+                      >
+                        {msg.crewUpdateData.isCollapsed ? (
+                          <ChevronRight size={14} className="mr-1" />
+                        ) : (
+                          <ChevronDown size={14} className="mr-1" />
+                        )}
+                        {msg.crewUpdateData.isCollapsed ? "Show Full Output" : "Hide Full Output"}
+                      </Button>
+                      {!msg.crewUpdateData.isCollapsed && (
+                        <div
+                          id={`full-output-${msg.id}`}
+                          className="mt-1 w-full rounded-md border bg-purple-25 dark:bg-purple-900/20 p-0.5 overflow-hidden"
+                          style={{ height: "192px" }}
+                        >
+                          {outputLines.length > 0 ? (
+                            <List
+                              height={192}
+                              itemCount={outputLines.length}
+                              itemSize={18}
+                              width="100%"
+                              itemData={outputLines}
+                              className="custom-scrollbar"
                             >
-                              {outputLines.length > 0 ? (
-                                <List
-                                  height={192}
-                                  itemCount={outputLines.length}
-                                  itemSize={18}
-                                  width="100%"
-                                  itemData={outputLines}
-                                  className="custom-scrollbar"
-                                >
-                                  {OutputLine}
-                                </List>
-                              ) : (
-                                <p className="p-2 text-xs text-slate-500 dark:text-slate-400">
-                                  No detailed output available.
-                                </p>
-                              )}
-                            </div>
+                              {OutputLine}
+                            </List>
+                          ) : (
+                            <p className="p-2 text-xs text-slate-500 dark:text-slate-400">
+                              No detailed output available.
+                            </p>
                           )}
-                        </div>
-                      )}
-
-                      {msg.subText && !msg.isSuccess && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{msg.subText}</p>
-                      )}
-                      {msg.isSuccess && (
-                        <div className="mt-2 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-md">
-                          <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
-                            <CheckCircle2 size={16} /> <p className="font-medium text-xs">{msg.subText}</p>
-                          </div>
-                          {msg.details && (
-                            <ul className="list-disc list-inside text-xs text-green-600 dark:text-green-300 mt-1 space-y-0.5 pl-1">
-                              {msg.details.map((d, i) => (
-                                <li key={i}>{d}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      )}
-                      {msg.type !== "typing" && (
-                        <div className="text-xs text-slate-400 dark:text-slate-500 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {formatTime(msg.timestamp)}
-                          {msg.agentName && <span className="ml-2">• {msg.agentName}</span>}
                         </div>
                       )}
                     </div>
-                    {msg.type === "user" && (
-                      <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 mt-1">
-                        <UserCircle2 size={20} />
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              {Array.from(interAgentMessages.entries()).map(([collabId, collabMsgs]) => {
-                const collabMsg = currentMessages.find(
-                  (m) => m.collaborationData?.id === collabId && m.type === "collaboration",
-                )
-                if (!collabMsg?.collaborationData) return null
-                const collabAgents = availableAgents.filter((a) => collabMsg.collaborationData!.agents.includes(a.name))
-                const currentProgress = Math.min((collabMsgs.length / 8) * 100, 100)
-                const mockSteps = collabAgents.map((agent, index) => ({
-                  id: `step-${collabId}-${index}`,
-                  agentName: agent.name,
-                  description: `${agent.name} ${agent.specialties[0].toLowerCase()}`,
-                  status: "pending" as const,
-                  progress: 0,
-                  estimatedTime: "2-3 min",
-                }))
-                return (
-                  <div key={collabId} className="my-6">
-                    <CollaborationWorkspace
-                      collaborationId={collabId}
-                      agents={collabAgents}
-                      steps={mockSteps}
-                      overallProgress={currentProgress}
-                      estimatedCompletion="8-12 min"
-                      interAgentMessages={collabMsgs}
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          </ScrollArea>
+                  )}
 
-          <div className="p-4 border-t bg-white dark:bg-slate-900 dark:border-slate-700">
-            <div className="relative">
-              <Input
-                ref={inputRef}
-                type="text"
-                placeholder="Ask the AI Crew... (e.g., Draft a marketing plan for a new SaaS product)"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyPress={handleKeyPress}
-                disabled={isSending || !isSettingsLoaded} // Disable if settings not loaded
-                className="pr-28 pl-4 py-3 h-12 text-sm dark:bg-slate-800 dark:border-slate-700 disabled:opacity-50"
-              />
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-slate-500 dark:text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400"
-                  disabled={isSending}
-                >
-                  <Paperclip size={18} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-slate-500 dark:text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-400"
-                  disabled={isSending}
-                >
-                  <Mic size={18} />
-                </Button>
-                <Button
-                  size="icon"
-                  className="bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 w-9 h-9 disabled:opacity-50"
-                  onClick={() => handleSendMessage()}
-                  disabled={isSending || inputValue.trim() === "" || !isSettingsLoaded} // Disable if settings not loaded
-                >
-                  {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                </Button>
+                  {msg.subText && !msg.isSuccess && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{msg.subText}</p>
+                  )}
+                  {msg.isSuccess && (
+                    <div className="mt-2 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-md">
+                      <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                        <CheckCircle2 size={16} /> <p className="font-medium text-xs">{msg.subText}</p>
+                      </div>
+                      {msg.details && (
+                        <ul className="list-disc list-inside text-xs text-green-600 dark:text-green-300 mt-1 space-y-0.5 pl-1">
+                          {msg.details.map((d, i) => (
+                            <li key={i}>{d}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  {msg.type !== "typing" && (
+                    <div className="text-xs text-slate-400 dark:text-slate-500 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {formatTime(msg.timestamp)}
+                      {msg.agentName && <span className="ml-2">• {msg.agentName}</span>}
+                    </div>
+                  )}
+                </div>
+                {msg.type === "user" && (
+                  <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 mt-1">
+                    <UserCircle2 size={20} />
+                  </div>
+                )}
               </div>
-            </div>
-            {isSending && (
-              <div className="flex items-center gap-2 mt-2 text-xs text-slate-500 dark:text-slate-400">
-                <Loader2 size={12} className="animate-spin" />
-                <span>AI Crew is processing your request...</span>
-              </div>
-            )}
-            {!isSettingsLoaded && (
-              <div className="flex items-center gap-2 mt-2 text-xs text-amber-600 dark:text-amber-500">
-                <Loader2 size={12} className="animate-spin" />
-                <span>Loading settings... Please wait.</span>
-              </div>
-            )}
+            ))}
+            {Array.from(interAgentMessages.entries()).map(([collabId, collabMsgs]) => {
+              const collabMsg = currentMessages.find(
+                (m) => m.collaborationData?.id === collabId && m.type === "collaboration",
+              )
+              if (!collabMsg?.collaborationData) return null
+              const collabAgents = availableAgents.filter((a) => collabMsg.collaborationData!.agents.includes(a.name))
+              const currentProgress = Math.min((collabMsgs.length / 8) * 100, 100)
+              const mockSteps = collabAgents.map((agent, index) => ({
+                id: `step-${collabId}-${index}`,
+                agentName: agent.name,
+                description: `${agent.name} ${agent.specialties[0].toLowerCase()}`,
+                status: "pending" as const,
+                progress: 0,
+                estimatedTime: "2-3 min",
+              }))
+              return (
+                <div key={collabId} className="my-6">
+                  <CollaborationWorkspace
+                    collaborationId={collabId}
+                    agents={collabAgents}
+                    steps={mockSteps}
+                    overallProgress={currentProgress}
+                    estimatedCompletion="8-12 min"
+                    interAgentMessages={collabMsgs}
+                  />
+                </div>
+              )
+            })}
           </div>
+        </ScrollArea>
+
+        <div className="p-4 border-t bg-white dark:bg-slate-900 dark:border-slate-700">
+          <div className="relative">
+            <Input
+              ref={inputRef}
+              type="text"
+              placeholder="Ask the n8n-powered agent..."
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyPress={handleKeyPress}
+              disabled={isSending || !isSettingsLoaded}
+              className="pr-28 pl-4 py-3 h-12 text-sm dark:bg-slate-800 dark:border-slate-700"
+            />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              <Button
+                size="icon"
+                className="bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 w-9 h-9"
+                onClick={handleSendMessage}
+                disabled={isSending || inputValue.trim() === "" || !isSettingsLoaded}
+              >
+                {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+              </Button>
+            </div>
+          </div>
+          {!isSettingsLoaded && (
+            <div className="flex items-center gap-2 mt-2 text-xs text-amber-600 dark:text-amber-500">
+              <Loader2 size={12} className="animate-spin" />
+              <span>Loading settings... Please wait.</span>
+            </div>
+          )}
         </div>
-      </section>
-    </>
+      </div>
+    </section>
   )
 }

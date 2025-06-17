@@ -12,50 +12,47 @@ export const rangeSchema = (min: number, max: number, fieldName: string) =>
 
 // LLM Provider validation
 export const llmProviderSchema = z.object({
-  id: z.string().min(1, "Provider ID is required"),
-  name: z.string().min(1, "Provider name is required").max(50, "Provider name must be less than 50 characters"),
+  id: z.string(),
+  name: z.string().min(1, "Provider name is required"),
   type: z.enum(["openai", "anthropic", "google", "azure", "local", "custom"]),
-  apiKey: apiKeySchema,
-  endpoint: urlSchema,
-  models: z.array(z.string().min(1, "Model name cannot be empty")).min(1, "At least one model is required"),
+  apiKey: z.string().optional(), // API keys are now managed on the server
+  endpoint: z.string().url("Must be a valid URL").optional().or(z.literal("")),
+  models: z.array(z.string()).min(1, "At least one model is required"),
   defaultModel: z.string().min(1, "Default model is required"),
   enabled: z.boolean(),
   rateLimits: z.object({
-    requestsPerMinute: rangeSchema(1, 1000, "Requests per minute"),
-    tokensPerMinute: rangeSchema(1000, 1000000, "Tokens per minute"),
+    requestsPerMinute: z.number().min(1),
+    tokensPerMinute: z.number().min(1000),
   }),
-  customHeaders: z.record(z.string()).optional(),
-  description: z.string().max(200, "Description must be less than 200 characters").optional(),
+  description: z.string().optional(),
 })
 
 // Agent configuration validation
 export const agentConfigSchema = z.object({
-  id: z.string().min(1, "Agent ID is required"),
-  name: z.string().min(1, "Agent name is required").max(50, "Agent name must be less than 50 characters"),
-  description: z.string().min(1, "Description is required").max(200, "Description must be less than 200 characters"),
+  id: z.string(),
+  name: z.string().min(3, "Name must be at least 3 characters"),
+  description: z.string().max(200, "Description cannot exceed 200 characters"),
   enabled: z.boolean(),
-  llmProvider: z.string().min(1, "LLM provider is required"),
+  n8nWorkflowTag: z.string().min(1, "n8n Workflow Tag is required."),
+  llmProvider: z.string().min(1, "LLM Provider is required"),
   model: z.string().min(1, "Model is required"),
-  systemPrompt: z
-    .string()
-    .min(10, "System prompt must be at least 10 characters")
-    .max(2000, "System prompt must be less than 2000 characters"),
-  temperature: rangeSchema(0, 2, "Temperature"),
-  maxTokens: rangeSchema(1, 8000, "Max tokens"),
-  topP: rangeSchema(0, 1, "Top P"),
-  frequencyPenalty: rangeSchema(-2, 2, "Frequency penalty"),
-  presencePenalty: rangeSchema(-2, 2, "Presence penalty"),
-  capabilities: z.array(z.string().min(1, "Capability cannot be empty")).min(1, "At least one capability is required"),
-  specialties: z.array(z.string().min(1, "Specialty cannot be empty")).min(1, "At least one specialty is required"),
+  systemPrompt: z.string().min(10, "System prompt is too short").max(2000),
+  temperature: z.number().min(0).max(2),
+  maxTokens: z.number().min(50).max(8000),
+  topP: z.number().min(0).max(1),
+  frequencyPenalty: z.number().min(-2).max(2),
+  presencePenalty: z.number().min(-2).max(2),
+  capabilities: z.array(z.string()).min(1, "At least one capability is required"),
+  specialties: z.array(z.string()).min(1, "At least one specialty is required"),
   responseStyle: z.enum(["professional", "casual", "technical", "creative"]),
-  maxConcurrentTasks: rangeSchema(1, 10, "Max concurrent tasks"),
-  timeoutSeconds: rangeSchema(10, 300, "Timeout"),
-  retryAttempts: rangeSchema(1, 5, "Retry attempts"),
-  customInstructions: z.string().max(500, "Custom instructions must be less than 500 characters"),
+  maxConcurrentTasks: z.number().min(1).max(10),
+  timeoutSeconds: z.number().min(10).max(300),
+  retryAttempts: z.number().min(1).max(5),
+  customInstructions: z.string().max(500).optional(),
   collaborationPreferences: z.object({
     preferredPartners: z.array(z.string()),
     communicationStyle: z.enum(["direct", "collaborative", "supportive"]),
-    handoffThreshold: rangeSchema(0, 1, "Handoff threshold"),
+    handoffThreshold: z.number().min(0).max(1),
   }),
 })
 

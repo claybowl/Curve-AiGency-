@@ -11,7 +11,18 @@ import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ListChecks, Phone, Search, Settings, Brain, Zap, MessageSquare, Save, AlertTriangle } from "lucide-react"
+import {
+  ListChecks,
+  Phone,
+  Search,
+  Settings,
+  Brain,
+  Zap,
+  MessageSquare,
+  Save,
+  AlertTriangle,
+  Link2,
+} from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { useFormValidation } from "@/hooks/use-form-validation"
 import { agentConfigSchema } from "@/lib/validation"
@@ -26,6 +37,7 @@ interface AgentConfig {
   color: string
   bgColor: string
   enabled: boolean
+  n8nWorkflowTag: string // New field for n8n integration
   llmProvider: string
   model: string
   systemPrompt: string
@@ -57,6 +69,7 @@ const defaultAgents: AgentConfig[] = [
     color: "text-blue-600",
     bgColor: "bg-blue-50 dark:bg-blue-900/20",
     enabled: true,
+    n8nWorkflowTag: "planner_agent_workflow", // Example tag
     llmProvider: "openai",
     model: "gpt-4o",
     systemPrompt:
@@ -92,6 +105,7 @@ const defaultAgents: AgentConfig[] = [
     color: "text-sky-600",
     bgColor: "bg-sky-50 dark:bg-sky-900/20",
     enabled: true,
+    n8nWorkflowTag: "phone_agent_workflow", // Example tag
     llmProvider: "anthropic",
     model: "claude-3-5-sonnet-20241022",
     systemPrompt:
@@ -127,6 +141,7 @@ const defaultAgents: AgentConfig[] = [
     color: "text-green-600",
     bgColor: "bg-green-50 dark:bg-green-900/20",
     enabled: true,
+    n8nWorkflowTag: "research_agent_workflow", // Example tag
     llmProvider: "google",
     model: "gemini-1.5-pro",
     systemPrompt:
@@ -355,7 +370,11 @@ export default function AgentSettings() {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="llm" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
+              <TabsTrigger value="integration" className="gap-2">
+                <Link2 className="h-4 w-4" />
+                Integration
+              </TabsTrigger>
               <TabsTrigger value="llm" className="gap-2">
                 <Brain className="h-4 w-4" />
                 LLM
@@ -373,6 +392,24 @@ export default function AgentSettings() {
                 Collaboration
               </TabsTrigger>
             </TabsList>
+
+            <TabsContent value="integration" className="space-y-6">
+              <CardTitle>n8n Integration</CardTitle>
+              <CardDescription>Connect this agent to a specific n8n workflow using a unique tag.</CardDescription>
+              <div className="space-y-2">
+                <Label htmlFor="n8n-workflow-tag">n8n Workflow Tag *</Label>
+                <Input
+                  id="n8n-workflow-tag"
+                  value={currentAgent.n8nWorkflowTag}
+                  onChange={(e) => handleFieldChange("n8nWorkflowTag", e.target.value)}
+                  placeholder="e.g., research_agent_prod"
+                />
+                <FormError error={getFieldError("n8nWorkflowTag")} />
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This tag is sent to your n8n webhook to identify which agent logic to execute.
+                </p>
+              </div>
+            </TabsContent>
 
             <TabsContent value="llm" className="space-y-6">
               {/* LLM Provider Selection */}

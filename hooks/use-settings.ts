@@ -7,6 +7,7 @@ interface AgentConfig {
   id: string
   name: string
   enabled: boolean
+  n8nWorkflowTag: string
   llmProvider: string
   model: string
   systemPrompt: string
@@ -24,9 +25,15 @@ interface LLMProviderConfig {
   [key: string]: any
 }
 
+interface SystemSettingsConfig {
+  // Define system settings properties
+  [key: string]: any
+}
+
 export function useSettings() {
   const [agentSettings, setAgentSettings] = useState<AgentConfig[]>([])
   const [llmProviderSettings, setLlmProviderSettings] = useState<LLMProviderConfig[]>([])
+  const [systemSettings, setSystemSettings] = useState<SystemSettingsConfig>({})
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false)
 
   const loadSettings = useCallback(() => {
@@ -39,6 +46,11 @@ export function useSettings() {
       const savedLlmProviderSettings = localStorage.getItem("llm-provider-settings")
       if (savedLlmProviderSettings) {
         setLlmProviderSettings(JSON.parse(savedLlmProviderSettings))
+      }
+
+      const savedSystemSettings = localStorage.getItem("system-settings")
+      if (savedSystemSettings) {
+        setSystemSettings(JSON.parse(savedSystemSettings))
       }
     } catch (error) {
       console.error("Failed to load settings from localStorage:", error)
@@ -56,5 +68,5 @@ export function useSettings() {
     }
   }, [loadSettings])
 
-  return { agentSettings, llmProviderSettings, isSettingsLoaded }
+  return { agentSettings, llmProviderSettings, systemSettings, isSettingsLoaded }
 }

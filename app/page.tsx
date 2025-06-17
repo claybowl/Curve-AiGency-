@@ -5,7 +5,6 @@ import Header from "@/components/header"
 import Sidebar from "@/components/sidebar"
 import CompactSessionManager from "@/components/compact-session-manager"
 import AgentConsole from "@/components/agent-console"
-import AgentStatusPanel from "@/components/agent-status-panel"
 import { ListChecks, Phone, Video, Search, BarChart3, Globe, FileText } from "lucide-react"
 
 const initialMessages = [
@@ -229,13 +228,12 @@ export default function WorkbenchPage() {
     // Create a new session with agent-specific name
     const sessionName = prompt ? `${agent.name}: ${prompt.substring(0, 30)}...` : `${agent.name} Session`
 
-    const newSessionId = createSession(sessionName)
+    const newSessionId = createSession(sessionName, agent.name) // Pass agent name to session
 
     // If a prompt was provided, add it as the first user message
     if (prompt && newSessionId) {
       setTimeout(() => {
-        const activeSession =
-          sessions.find((s) => s.id === newSessionId) || sessions.find((s) => s.name === sessionName)
+        const activeSession = sessions.find((s) => s.id === newSessionId)
 
         if (activeSession) {
           const userMessage = {
@@ -248,7 +246,7 @@ export default function WorkbenchPage() {
           const agentResponse = {
             id: (Date.now() + 1).toString(),
             type: "bot" as const,
-            text: `Hello! I'm the ${agent.name}. I'll help you with: ${prompt}`,
+            text: `Hello! I'm the ${agent.name}, connected via n8n. I'll help you with: ${prompt}`,
             subText: `Specialized in ${agent.specialties[0]}`,
             timestamp: new Date(),
             agentName: agent.name,
@@ -299,7 +297,6 @@ export default function WorkbenchPage() {
           onUpdateSessionMessages={updateSessionMessages}
           availableAgents={availableAgents}
         />
-        <AgentStatusPanel />
       </main>
     </>
   )
