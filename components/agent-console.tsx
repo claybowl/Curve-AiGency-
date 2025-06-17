@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useToast } from "@/components/ui/use-toast"
-import { useSettings } from "@/hooks/use-settings"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import {
   Send,
@@ -23,6 +22,8 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
+  AlertTriangle,
+  HelpCircle,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import CollaborationWorkspace from "@/components/collaboration-workspace"
@@ -32,13 +33,24 @@ import { FixedSizeList as List } from "react-window"
 
 interface Message {
   id: string
-  type: "user" | "bot" | "bot-complex" | "typing" | "handoff" | "collaboration" | "collaboration-update" | "crew_update"
+  type:
+    | "user"
+    | "bot"
+    | "bot-complex"
+    | "typing"
+    | "handoff"
+    | "collaboration"
+    | "collaboration-update"
+    | "crew_update"
+    | "warning"
+    | "troubleshooting"
   text: string
   subText?: string
   isSuccess?: boolean
   details?: any // Can be an object or array from n8n
   timestamp: Date
   agentName?: string
+  troubleshooting?: string[]
   crewUpdateData?: {
     agentRole?: string
     taskDescription?: string
@@ -152,8 +164,6 @@ export default function AgentConsole({
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
-
-  const { agentSettings, systemSettings, isSettingsLoaded, llmProviderSettings } = useSettings() // Use our settings hook
 
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const currentMessages = activeSession?.messages || [] // Renamed to avoid conflict with hook
@@ -322,216 +332,9 @@ export default function AgentConsole({
     [activeSession, addMessage, simulateInterAgentCommunication],
   )
 
-  const _handleSendMessage = async (crewConfig?: {
-    type: string
-    involved_agents?: string[]
-    task_description?: string
-  }) => {
-    const currentInputText = inputValue.trim() // Renamed to avoid conflict
-    if (currentInputText === "" && !crewConfig) return
-    if (isSending || !activeSession || !isSettingsLoaded) {
-      // Check if settings are loaded
-      if (!isSettingsLoaded) {
-        toast({
-          title: "Settings not loaded",
-          description: "Please wait for settings to load or check configuration.",
-          variant: "destructive",
-        })
-      }
-      return
-    }
-
-    setIsSending(true)
-    const userMessageText = crewConfig?.task_description || currentInputText
-
-    const userMessage: Message = {
-      id: Date.now().toString() + "-user",
-      type: "user",
-      text: userMessageText,
-      timestamp: new Date(),
-    }
-    addMessage(userMessage)
-
-    if (!crewConfig) {
-      setInputValue("")
-    }
-
-    const botMessageId = Date.now().toString() + "-crew"
-    let accumulatedBotText = ""
-
-    const initialBotMessage: Message = {
-      id: botMessageId,
-      type: "crew_update",
-      text: "🚀 AI Crew is initializing...",
-      timestamp: new Date(),
-      agentName: "CrewAI Orchestrator",
-      subText: "Waiting for updates from the crew...",
-      crewUpdateData: { isCollapsed: true },
-    }
-    addMessage(initialBotMessage)
-    scrollToBottom()
-
-    try {
-      const requestBody = {
-        prompt: userMessageText,
-        type: crewConfig?.type || "general_query",
-        involved_agents: crewConfig?.involved_agents,
-        task_description: crewConfig?.task_description || userMessageText,
-        crew_config: {
-          // Send settings to backend
-          agents: agentSettings,
-          providers: llmProviderSettings,
-          system: systemSettings,
-        },
-      }
-
-      const response = await fetch("/api/crew", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify(requestBody),
-      })
-
-      if (!response.ok || !response.body) {
-        const errorText = response.ok ? "Response body is null" : await response.text()
-        throw new Error(`Server error: ${response.status} ${errorText}`)
-      }
-
-      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
-      let buffer = ""
-
-      // eslint-disable-next-line no-constant-identifier
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-
-        buffer += value
-        let eolIndex
-        while ((eolIndex = buffer.indexOf("\n\n")) >= 0) {
-          const messageChunk = buffer.substring(0, eolIndex)
-          buffer = buffer.substring(eolIndex + 2)
-
-          if (messageChunk.startsWith("data: ")) {
-            const jsonData = messageChunk.substring("data: ".length)
-            try {
-              const eventData = JSON.parse(jsonData)
-              let newText = accumulatedBotText
-              let newSubText = ""
-              let crewUpdatePayload: Partial<Message["crewUpdateData"]> = { isCollapsed: true }
-
-              const existingMessage = currentMessages.find((m) => m.id === botMessageId)
-              if (existingMessage?.crewUpdateData?.fullOutput && eventData.type !== "task_update") {
-                crewUpdatePayload.fullOutput = existingMessage.crewUpdateData.fullOutput
-              }
-              if (existingMessage?.crewUpdateData?.isCollapsed !== undefined && eventData.type !== "task_update") {
-                crewUpdatePayload.isCollapsed = existingMessage.crewUpdateData.isCollapsed
-              }
-
-              switch (eventData.type) {
-                case "status_update":
-                  newSubText = `Status: ${eventData.data.message}`
-                  newText = `${eventData.data.message}\n${accumulatedBotText || "Processing..."}`
-                  crewUpdatePayload.agentRole = "Crew Orchestrator"
-                  break
-                case "task_update":
-                  const taskUpdate = eventData.data
-                  crewUpdatePayload = {
-                    agentRole: taskUpdate.agent_role,
-                    taskDescription: taskUpdate.task_description,
-                    outputSummary: taskUpdate.output_summary,
-                    fullOutput: taskUpdate.full_output,
-                    isCollapsed: existingMessage?.crewUpdateData?.isCollapsed ?? true,
-                  }
-                  newText += `\n\n**${taskUpdate.agent_role} completed task:**\n*${taskUpdate.task_description.substring(0, 70)}...*\n${taskUpdate.output_summary}`
-                  newSubText = `Task by ${taskUpdate.agent_role} finished.`
-                  break
-                case "final_result":
-                  newText += `\n\n**🏁 Final Result:**\n${eventData.data.result}`
-                  newSubText = `Crew finished: ${eventData.data.crew_details?.agents_used?.join(", ") || "N/A"}.`
-                  crewUpdatePayload.agentRole = "Crew Orchestrator"
-                  crewUpdatePayload.outputSummary = eventData.data.result
-                  break
-                case "error":
-                  newText += `\n\n**⚠️ Error:** ${eventData.data.message}`
-                  newSubText = "An error occurred with the AI Crew."
-                  crewUpdatePayload.agentRole = "Crew Orchestrator"
-                  break
-                case "stream_end":
-                  newSubText = eventData.data.message || "Processing complete."
-                  if (accumulatedBotText === "") newText = "Processing complete."
-                  crewUpdatePayload.agentRole = "Crew Orchestrator"
-                  crewUpdatePayload.outputSummary = eventData.data.result
-                  break
-              }
-              accumulatedBotText = newText
-              updateMessage(botMessageId, {
-                text: accumulatedBotText,
-                subText: newSubText,
-                crewUpdateData: {
-                  ...(currentMessages.find((m) => m.id === botMessageId)?.crewUpdateData || {}),
-                  ...crewUpdatePayload,
-                },
-              })
-              scrollToBottom()
-
-              if (eventData.type === "stream_end" || eventData.type === "error") {
-                await reader.cancel()
-                return
-              }
-            } catch (e) {
-              console.error("Error parsing SSE JSON data:", e, "Raw data:", jsonData)
-              updateMessage(botMessageId, {
-                text: accumulatedBotText + `\n[Stream Parse Error]`,
-                subText: "Error processing stream data.",
-              })
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Streaming Fetch Error:", error)
-      toast({
-        title: "Connection Error",
-        description: error instanceof Error ? error.message : "Unknown connection error.",
-        variant: "destructive",
-      })
-      updateMessage(botMessageId, {
-        text: `Connection Error: ${error instanceof Error ? error.message : "Unknown connection error."}`,
-        subText: "Failed to connect to AI Crew.",
-      })
-    } finally {
-      setIsSending(false)
-      setTimeout(scrollToBottom, 100)
-      setTimeout(() => {
-        inputRef.current?.focus()
-      }, 100)
-    }
-  }
-
   const handleSendMessage = async () => {
     const currentInputText = inputValue.trim()
     if (currentInputText === "" || isSending || !activeSession) return
-
-    if (!isSettingsLoaded) {
-      toast({
-        title: "Settings not loaded",
-        description: "Please wait for settings to load before sending a message.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const activeAgentName = activeSession.currentAgent || "Planner Agent"
-    const activeAgentConfig = agentSettings.find((a) => a.name === activeAgentName)
-
-    if (!activeAgentConfig) {
-      toast({
-        title: "Agent Configuration Not Found",
-        description: `Could not find settings for "${activeAgentName}". Please check your agent settings.`,
-        variant: "destructive",
-      })
-      return
-    }
 
     setIsSending(true)
     setInputValue("")
@@ -542,34 +345,42 @@ export default function AgentConsole({
       text: currentInputText,
       timestamp: new Date(),
     }
-    addMessage(userMessage)
+
+    const newMessages = [...currentMessages, userMessage]
+    onUpdateSessionMessages(activeSessionId, newMessages)
 
     const typingMessage: Message = {
       id: Date.now().toString() + "-typing",
       type: "typing",
-      text: `${activeAgentName} is thinking...`,
+      text: `Agent is thinking...`,
       timestamp: new Date(),
-      agentName: activeAgentName,
+      agentName: "n8n Agent",
     }
-    addMessage(typingMessage)
+    onUpdateSessionMessages(activeSessionId, [...newMessages, typingMessage])
     scrollToBottom()
+
+    // Map frontend messages to the format expected by the backend
+    const payloadMessages = newMessages
+      .filter((msg) => msg.type === "user" || msg.type === "bot" || msg.type === "bot-complex")
+      .map((msg) => ({
+        role: msg.type === "user" ? "user" : "assistant",
+        content: msg.text,
+      }))
 
     try {
       const response = await fetch("/api/n8n", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: currentInputText,
-          agentConfig: activeAgentConfig,
-          systemSettings: systemSettings,
+          sessionId: activeSessionId,
+          userId: "user_01", // Static user ID as per design
+          messages: payloadMessages,
         }),
       })
 
       // Remove typing indicator
-      onUpdateSessionMessages(
-        activeSessionId,
-        currentMessages.filter((m) => m.id !== typingMessage.id),
-      )
+      const messagesWithoutTyping = newMessages.filter((m) => m.id !== typingMessage.id)
+      onUpdateSessionMessages(activeSessionId, messagesWithoutTyping)
 
       if (!response.ok) {
         const errorData = await response.json()
@@ -578,16 +389,47 @@ export default function AgentConsole({
 
       const data = await response.json()
 
+      // Handle warning if present
+      if (data.warning) {
+        const warningMessage: Message = {
+          id: Date.now().toString() + "-warning",
+          type: "warning",
+          text: data.warning,
+          timestamp: new Date(),
+          agentName: "System",
+        }
+        onUpdateSessionMessages(activeSessionId, [...messagesWithoutTyping, warningMessage])
+      }
+
+      // Handle troubleshooting info if present
+      if (data.troubleshooting && data.troubleshooting.length > 0) {
+        const troubleshootingMessage: Message = {
+          id: Date.now().toString() + "-troubleshooting",
+          type: "troubleshooting",
+          text: "Here are some steps to fix this issue:",
+          troubleshooting: data.troubleshooting,
+          timestamp: new Date(),
+          agentName: "System",
+        }
+        const currentSessionMessages = sessions.find((s) => s.id === activeSessionId)?.messages || []
+        onUpdateSessionMessages(activeSessionId, [...currentSessionMessages, troubleshootingMessage])
+      }
+
+      // Handle the response - either from data.response or fallback
+      const responseText = data.response || "Received a response from the agent, but it was not in the expected format."
+
       const botMessage: Message = {
         id: Date.now().toString() + "-bot",
-        type: "bot-complex",
-        text: data.output || "Received a response from the agent.",
-        subText: `Response from ${activeAgentName} via n8n`,
-        details: data,
+        type: "bot",
+        text: responseText,
+        subText: `Response from n8n Agent`,
         timestamp: new Date(),
-        agentName: activeAgentName,
+        agentName: "n8n Agent",
       }
-      addMessage(botMessage)
+
+      // Add the bot message after any warning/troubleshooting
+      const currentSessionMessages = sessions.find((s) => s.id === activeSessionId)?.messages || []
+      onUpdateSessionMessages(activeSessionId, [...currentSessionMessages, botMessage])
     } catch (error) {
       console.error("Error sending message to n8n:", error)
       const errorMessage = error instanceof Error ? error.message : "Unknown error"
@@ -596,11 +438,9 @@ export default function AgentConsole({
         description: errorMessage,
         variant: "destructive",
       })
+
       // Remove typing indicator and add error message
-      onUpdateSessionMessages(
-        activeSessionId,
-        currentMessages.filter((m) => m.id !== typingMessage.id),
-      )
+      const finalMessages = newMessages.filter((m) => m.id !== typingMessage.id)
       const errorMessageBot: Message = {
         id: Date.now().toString() + "-error",
         type: "bot",
@@ -608,10 +448,11 @@ export default function AgentConsole({
         subText: "Please check the connection to the n8n service and try again.",
         timestamp: new Date(),
       }
-      addMessage(errorMessageBot)
+      onUpdateSessionMessages(activeSessionId, [...finalMessages, errorMessageBot])
     } finally {
       setIsSending(false)
       setTimeout(() => inputRef.current?.focus(), 100)
+      setTimeout(scrollToBottom, 100)
     }
   }
 
@@ -717,7 +558,11 @@ export default function AgentConsole({
                   <div
                     className={cn(
                       "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-white mt-1",
-                      "bg-indigo-500 dark:bg-indigo-600",
+                      msg.type === "warning"
+                        ? "bg-amber-500 dark:bg-amber-600"
+                        : msg.type === "troubleshooting"
+                          ? "bg-blue-500 dark:bg-blue-600"
+                          : "bg-indigo-500 dark:bg-indigo-600",
                     )}
                   >
                     {msg.type === "typing" ? (
@@ -728,6 +573,10 @@ export default function AgentConsole({
                       <ArrowRight size={16} />
                     ) : msg.type === "collaboration" || msg.type === "collaboration-update" ? (
                       <Users size={16} />
+                    ) : msg.type === "warning" ? (
+                      <AlertTriangle size={16} />
+                    ) : msg.type === "troubleshooting" ? (
+                      <HelpCircle size={16} />
                     ) : (
                       <Bot size={18} />
                     )}
@@ -746,7 +595,11 @@ export default function AgentConsole({
                             ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
                             : msg.type === "collaboration" || msg.type === "collaboration-update"
                               ? "bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-bl-none"
-                              : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none",
+                              : msg.type === "warning"
+                                ? "bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-bl-none"
+                                : msg.type === "troubleshooting"
+                                  ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-bl-none"
+                                  : "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-bl-none",
                   )}
                 >
                   {msg.type === "crew_update" && msg.crewUpdateData?.agentRole && (
@@ -761,7 +614,34 @@ export default function AgentConsole({
                       )}
                     </div>
                   )}
+
+                  {msg.type === "warning" && (
+                    <div className="mb-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                      <AlertTriangle size={12} className="inline mr-1" />
+                      Configuration Warning
+                    </div>
+                  )}
+
+                  {msg.type === "troubleshooting" && (
+                    <div className="mb-1 text-xs font-medium text-blue-700 dark:text-blue-400">
+                      <HelpCircle size={12} className="inline mr-1" />
+                      Troubleshooting Steps
+                    </div>
+                  )}
+
                   <p className="whitespace-pre-wrap">{msg.text}</p>
+
+                  {msg.troubleshooting && msg.troubleshooting.length > 0 && (
+                    <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-md">
+                      <ul className="list-decimal list-inside text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                        {msg.troubleshooting.map((step, i) => (
+                          <li key={i} className="leading-relaxed">
+                            {step}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   {msg.type === "crew_update" && msg.crewUpdateData?.fullOutput && (
                     <div className="mt-2 border-t border-purple-200 dark:border-purple-700 pt-2">
@@ -878,7 +758,7 @@ export default function AgentConsole({
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={handleKeyPress}
-              disabled={isSending || !isSettingsLoaded}
+              disabled={isSending}
               className="pr-28 pl-4 py-3 h-12 text-sm dark:bg-slate-800 dark:border-slate-700"
             />
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -886,18 +766,12 @@ export default function AgentConsole({
                 size="icon"
                 className="bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600 w-9 h-9"
                 onClick={handleSendMessage}
-                disabled={isSending || inputValue.trim() === "" || !isSettingsLoaded}
+                disabled={isSending || inputValue.trim() === ""}
               >
                 {isSending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
               </Button>
             </div>
           </div>
-          {!isSettingsLoaded && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-amber-600 dark:text-amber-500">
-              <Loader2 size={12} className="animate-spin" />
-              <span>Loading settings... Please wait.</span>
-            </div>
-          )}
         </div>
       </div>
     </section>

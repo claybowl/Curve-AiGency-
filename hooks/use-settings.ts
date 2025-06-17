@@ -7,21 +7,8 @@ interface AgentConfig {
   id: string
   name: string
   enabled: boolean
-  n8nWorkflowTag: string
-  llmProvider: string
-  model: string
-  systemPrompt: string
-  temperature: number
+  n8nWorkflowTag: string // This might be useful for UI, but not sent to backend
   // Add other agent properties as needed
-  [key: string]: any
-}
-
-interface LLMProviderConfig {
-  id: string
-  name: string
-  enabled: boolean
-  defaultModel: string
-  // Add other provider properties as needed
   [key: string]: any
 }
 
@@ -32,7 +19,6 @@ interface SystemSettingsConfig {
 
 export function useSettings() {
   const [agentSettings, setAgentSettings] = useState<AgentConfig[]>([])
-  const [llmProviderSettings, setLlmProviderSettings] = useState<LLMProviderConfig[]>([])
   const [systemSettings, setSystemSettings] = useState<SystemSettingsConfig>({})
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false)
 
@@ -41,11 +27,6 @@ export function useSettings() {
       const savedAgentSettings = localStorage.getItem("agent-settings")
       if (savedAgentSettings) {
         setAgentSettings(JSON.parse(savedAgentSettings))
-      }
-
-      const savedLlmProviderSettings = localStorage.getItem("llm-provider-settings")
-      if (savedLlmProviderSettings) {
-        setLlmProviderSettings(JSON.parse(savedLlmProviderSettings))
       }
 
       const savedSystemSettings = localStorage.getItem("system-settings")
@@ -60,13 +41,15 @@ export function useSettings() {
   }, [])
 
   useEffect(() => {
-    loadSettings()
-    // Optional: Listen for storage events to update if settings are changed in another tab
-    window.addEventListener("storage", loadSettings)
-    return () => {
-      window.removeEventListener("storage", loadSettings)
+    if (typeof window !== "undefined") {
+      loadSettings()
+      // Optional: Listen for storage events to update if settings are changed in another tab
+      window.addEventListener("storage", loadSettings)
+      return () => {
+        window.removeEventListener("storage", loadSettings)
+      }
     }
   }, [loadSettings])
 
-  return { agentSettings, llmProviderSettings, systemSettings, isSettingsLoaded }
+  return { agentSettings, systemSettings, isSettingsLoaded }
 }
